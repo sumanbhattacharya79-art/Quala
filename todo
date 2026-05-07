@@ -1,0 +1,40 @@
+user flow:
+save portfolio- portfolio get saved. update portfolio with 15 min delay stock data. update health EOD. 
+scenario plans: same portfolio , but different scenario- money inflow and outflow
+EOD: check rebalance, check tax loss harveting
+
+1. analyze my portfolio- portfolio get uploaded + user input: goal - check if portfolio meet the user goal, if not come up with a should be portfolio
+ask if they want to save the should be portfolio, otherwise save the older one. EOD: check rebalance, check tax loss harvesting, update health
+
+2. retirement agent- done
+
+3. dividend calendar- later
+
+4. relabalcing- rebalancing is at individual stock level, if >20% then 5% absolute else 25% relative, or vix> 20 risk off, volatility> 20% of baseline for a week, risk off
+
+5. tax analytics for retirement portfolio- later
+
+6. pull bank data- later
+
+7. backend: stock data pull, portfolio performance data, daily value etc
+
+8. user portfolio page scenario planning: done
+freeze intake form , make specific section editable for scanario planning
+
+growth scenario testing:
+vary: inflation, portfolio value,monthly savings, one time spending, retirement age
+retirement portfolio:
+vary: monthly expense, inflation, big spending, portfolio value, taxes,medical, SSN, expat
+
+9. ability to add other assets to show net worth
+
+10. compare two pprtfolio/ scenario- show different growth portfolio in risk-reward, 
+connect growth and retire
+
+11. stock screening, analyze, valuation- later
+
+12. tax loss harvest- later
+
+13. add rate of increase or decrease in spending or income in what if
+
+14. help calculate tax

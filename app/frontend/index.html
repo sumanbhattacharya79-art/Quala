@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quala AI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="header">
+        <h1>Quala AI</h1>
+        <p>Your all-in-one financial future, just a conversation away.</p>
+      </header>
+
+      <main class="layout">
+        <section class="chat">
+          <div id="llmStatus" class="llm-status hidden"></div>
+          <div id="debugStatus" class="debug-status hidden"></div>
+          <div id="chatLog" class="chat-log"></div>
+          <div id="welcomeOptions" class="welcome-options hidden">
+            <button data-intent="intake">Build a new portfolio</button>
+            <button data-intent="backtest">Analyze existing portfolio</button>
+          </div>
+          <form id="analyzeForm" class="intake-form hidden">
+            <label>
+              Portfolio weights (JSON)
+              <textarea id="analyzeJson" rows="4" placeholder='Example: {"AAPL": 0.5, "MSFT": 0.5}'></textarea>
+            </label>
+            <label>
+              Or upload CSV (ticker + weight or value)
+              <input id="analyzeCsv" type="file" accept=".csv" />
+            </label>
+            <button type="submit">Analyze</button>
+          </form>
+          <form id="intakeForm" class="intake-form hidden">
+            <label>
+              Planning for
+              <select id="planningForInput">
+                <option value="self">Just me</option>
+                <option value="couple">The two of us</option>
+              </select>
+            </label>
+            <label id="birthDate1Label">
+              Your birth (year and month)
+              <div class="birth-date-row">
+                <input id="birthYear1Input" type="number" placeholder="Year (e.g. 1975)" min="1920" max="2010" />
+                <input id="birthMonth1Input" type="number" placeholder="Month (1-12)" min="1" max="12" />
+              </div>
+            </label>
+            <label id="birthDate2Label" class="hidden">
+              Partner's birth (year and month)
+              <div class="birth-date-row">
+                <input id="birthYear2Input" type="number" placeholder="Year (e.g. 1978)" min="1920" max="2010" />
+                <input id="birthMonth2Input" type="number" placeholder="Month (1-12)" min="1" max="12" />
+              </div>
+            </label>
+            <label>
+              Risk appetite
+              <input id="riskInput" type="text" placeholder="Default: medium risk tolerance" />
+            </label>
+            <label>
+              Retirement timeline
+              <input id="retirementInput" type="text" placeholder="Default: 10 years" />
+            </label>
+            <label>
+              Big spending coming up?
+              <input id="spendingInput" type="text" placeholder="Default: none expected" />
+            </label>
+            <label>
+              Current investment value
+              <input id="investmentValueInput" type="text" placeholder="Default: 1000" />
+            </label>
+            <label>
+              How much you add monthly to your investment?
+              <input
+                id="monthlyContributionInput"
+                type="text"
+                placeholder="Example: 500 per month"
+              />
+            </label>
+            <label>
+              Current monthly expense
+              <input id="monthlyExpenseInput" type="text" placeholder="Example: 3000 (used as monthly withdrawal, inflation-adjusted)" />
+            </label>
+            <label>
+              Exact retirement date
+              <input id="retirementDateInput" type="text" placeholder="Example: 2038-06-30" />
+            </label>
+            <label>
+              Any other thing you want us to know
+              <input id="otherNotesInput" type="text" placeholder="Share any other details" />
+            </label>
+            <button type="submit">Continue</button>
+          </form>
+          <form id="refineForm" class="intake-form hidden">
+            <label>
+              Tickers to add to your portfolio
+              <input id="refineTickersInput" type="text" placeholder="Example: AAPL, NVDA, GLD" />
+            </label>
+            <label>
+              Risk appetite
+              <input id="refineRiskInput" type="text" placeholder="e.g. medium risk, up to 20% drawdown" />
+            </label>
+            <button type="submit">Refine portfolio</button>
+          </form>
+          <form id="authForm" class="intake-form hidden">
+            <h3 style="margin:0 0 12px">Create account to save portfolio</h3>
+            <p style="margin:0 0 12px;font-size:13px;color:#6b7280">Already have an account? Enter your email and password to log in.</p>
+            <label>
+              Email
+              <input id="authEmailInput" type="email" placeholder="you@example.com" required />
+            </label>
+            <label>
+              Password
+              <input id="authPasswordInput" type="password" placeholder="Min 6 characters" minlength="6" required />
+            </label>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button type="submit">Create account & save portfolio</button>
+              <button type="button" id="authCancelBtn" class="btn-secondary">Cancel</button>
+            </div>
+          </form>
+          <div id="chatInput" class="chat-input hidden">
+            <input id="chatMessage" type="text" placeholder="Ask to create a portfolio or run backtests..." />
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+

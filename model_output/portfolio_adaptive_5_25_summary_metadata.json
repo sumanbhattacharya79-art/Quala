@@ -1,0 +1,11 @@
+{
+  "frequency": "monthly",
+  "years": 15,
+  "periods": 180,
+  "start_value": 1.0,
+  "summary_quantiles": [
+    0.1,
+    0.5,
+    0.9
+  ]
+}
