@@ -773,10 +773,10 @@ def intake_context_from_user_intake_dict(
         return intake_ctx
     merged_growth, growth_income_rows, growth_misc_rows = _merge_growth_what_if_intake_dict(dict(raw_intake))
     intake_ctx = _build_intake_context(merged_growth)
-    if intake_ctx is not None and growth_income_rows:
-        intake_ctx.growth_monthly_income_rows = growth_income_rows
-    if intake_ctx is not None and growth_misc_rows:
-        intake_ctx.growth_misc_spending_rows = growth_misc_rows
+    if intake_ctx is not None:
+        # Always set (including empty) so cleared what-if rows replace prior session state, not stale lists.
+        intake_ctx.growth_monthly_income_rows = growth_income_rows or None
+        intake_ctx.growth_misc_spending_rows = growth_misc_rows or None
     if intake_ctx is not None:
         intake_ctx.growth_monthly_income_freeform = (
             str(raw_intake.get("growth_monthly_income_freeform") or "").strip() or None
@@ -798,13 +798,15 @@ def run_backtest_for_saved_portfolio(
     is_retirement: bool = False,
     portfolio_sector_weights: Optional[Dict[str, float]] = None,
     portfolio_industry_weights: Optional[Dict[str, float]] = None,
+    *,
+    use_portfolio_mark_for_initial: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Run backtest for a saved portfolio. Returns artifacts for frontend (Ana/Emu style).
 
     Sector/industry weights are optional UI breakdowns (same as live Quala/Panda flow); tickers drive returns.
     """
     merged_intake: Dict[str, Any] = dict(user_intake or {})
-    if not is_retirement:
+    if not is_retirement and use_portfolio_mark_for_initial:
         prow = get_portfolio(portfolio_id)
         if prow:
             raw_pv = prow.get("portfolio_value")

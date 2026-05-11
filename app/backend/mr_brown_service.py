@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from google import genai
 
@@ -30,6 +31,308 @@ from backend.portfolio_valuation import (
 
 _log = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Broad US / intl / factor ETFs beyond those in alphavantage_sector_bridge (used only for Mr Brown balance heuristics).
+_MR_BROWN_EXTRA_ETFS: frozenset[str] = frozenset(
+    {
+        "SPY",
+        "VOO",
+        "VTI",
+        "IVV",
+        "SPLG",
+        "SPTM",
+        "ITOT",
+        "QQQ",
+        "QQQM",
+        "IWM",
+        "DIA",
+        "SCHX",
+        "SCHB",
+        "SCHA",
+        "SCHM",
+        "SCHG",
+        "SCHV",
+        "SCHD",
+        "DGRO",
+        "HDV",
+        "VYM",
+        "JEPI",
+        "JEPQ",
+        "QYLD",
+        "XYLD",
+        "RYLD",
+        "VT",
+        "ACWI",
+        "IEMG",
+        "EFA",
+        "EEM",
+        "VUG",
+        "VB",
+        "VO",
+        "VV",
+        "MGK",
+        "MTUM",
+        "QUAL",
+        "USMV",
+        "SPLV",
+        "RSP",
+        "EWJ",
+        "EWG",
+        "EWU",
+        "EWC",
+        "FXI",
+        "INDA",
+        "XLK",
+        "XLF",
+        "XLE",
+        "XLV",
+        "XLI",
+        "XLY",
+        "XLP",
+        "XLU",
+        "XLB",
+        "XLRE",
+        "XLC",
+        "SOXX",
+        "SMH",
+        "ARKK",
+        "ARKQ",
+        "ARKG",
+        "ARKF",
+        "ARKW",
+        "IBIT",
+        "FBTC",
+        "GBTC",
+    }
+)
+_MR_BROWN_ETF_UNIVERSE: Optional[frozenset[str]] = None
+
+
+def _mr_brown_etf_universe() -> frozenset[str]:
+    global _MR_BROWN_ETF_UNIVERSE
+    if _MR_BROWN_ETF_UNIVERSE is not None:
+        return _MR_BROWN_ETF_UNIVERSE
+    from backend.alphavantage_sector_bridge import (
+        BOND_ETF_TICKERS,
+        CRYPTO_ETP_TICKERS,
+        INTL_EQUITY_TICKERS,
+        MATERIALS_TICKERS,
+    )
+
+    _MR_BROWN_ETF_UNIVERSE = frozenset(
+        BOND_ETF_TICKERS
+        | CRYPTO_ETP_TICKERS
+        | INTL_EQUITY_TICKERS
+        | MATERIALS_TICKERS
+        | _MR_BROWN_EXTRA_ETFS
+    )
+    return _MR_BROWN_ETF_UNIVERSE
+
+
+def _is_mrbrown_etf_ticker(ticker: str) -> bool:
+    t = str(ticker or "").strip().upper()
+    return bool(t) and t in _mr_brown_etf_universe()
+
+
+def user_seeks_rebalance_or_balance_advice(message: str) -> bool:
+    """True when the user likely wants allocation / diversification / rebalance guidance (deeper sector rollup)."""
+    m = (message or "").lower()
+    triggers = (
+        "rebalanc",
+        "re-balance",
+        "re balance",
+        "need to rebalance",
+        "should i rebalance",
+        "do i need",
+        "balanced",
+        "balance my",
+        "allocation",
+        "diversif",
+        "overweight",
+        "concentrat",
+        "too much in",
+        "sector",
+        "sectors",
+        "etf",
+        "etfs",
+        "single stock",
+        "individual stock",
+        "buy or sell",
+        "buy/sell",
+        "should i sell",
+        "should i buy",
+        "trim",
+        "add more",
+    )
+    return any(t in m for t in triggers)
+
+
+def _rollup_current_gics_sector_weights(
+    current_w: Dict[str, float],
+    per_ticker_sectors: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    agg: Dict[str, float] = defaultdict(float)
+    for t, w in current_w.items():
+        try:
+            fw = float(w)
+        except (TypeError, ValueError):
+            continue
+        if fw <= 0:
+            continue
+        smap = per_ticker_sectors.get(str(t).strip().upper()) or {"Other": 1.0}
+        for sec, frac in smap.items():
+            try:
+                fsec = float(frac)
+            except (TypeError, ValueError):
+                continue
+            agg[str(sec).strip() or "Other"] += fw * fsec
+    return {k: round(v, 6) for k, v in sorted(agg.items(), key=lambda kv: -kv[1])}
+
+
+def _compute_balance_basics(
+    row: Dict[str, Any],
+    current_w: Dict[str, float],
+    *,
+    include_deep_sector_rollup: bool,
+) -> Dict[str, Any]:
+    """
+    Structured balance checks for Mr Brown:
+    - GICS-style sector sleeves: no sector > 20% of portfolio (requires per-ticker sector maps when deep=True).
+    - ETF count: guideline expects *fewer than 8* distinct ETF tickers (i.e. count < 8).
+    - Single-name stocks (non-ETF): flag positions with current weight *above* 5% (concentration trim candidates).
+    """
+    tickers = [str(t).strip().upper() for t in current_w if float(current_w.get(t, 0) or 0) > 1e-8]
+    etf_set: Set[str] = {t for t in tickers if _is_mrbrown_etf_ticker(t)}
+    etf_count = len(etf_set)
+    etf_list_sorted = sorted(etf_set)
+
+    stock_over_5: List[Dict[str, Any]] = []
+    for t in tickers:
+        if _is_mrbrown_etf_ticker(t):
+            continue
+        try:
+            w = float(current_w.get(t, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if w > 0.05 + 1e-9:
+            stock_over_5.append({"ticker": t, "current_weight": round(w, 6)})
+
+    out: Dict[str, Any] = {
+        "guidelines": {
+            "max_sector_weight": 0.20,
+            "max_distinct_etf_count_exclusive": 8,
+            "note_etf_rule": "Pass when etf_distinct_count < 8 (strictly fewer than eight distinct ETFs in the known-ETF set).",
+            "single_stock_concentration": "Non-ETF tickers with current_weight > 0.05 are flagged as concentrated single names.",
+        },
+        "etf_distinct_count": etf_count,
+        "etf_distinct_tickers": etf_list_sorted,
+        "etf_count_passes_lt_8": etf_count < 8,
+        "non_etf_positions_over_5pct_current_weight": stock_over_5,
+        "single_stock_concentration_ok": len(stock_over_5) == 0,
+        "current_gics_sector_weights": None,
+        "sectors_over_20pct_current": [],
+        "sector_rollup_available": False,
+        "sector_rollup_note": None,
+        "tickers_notable_for_overweight_sector_sleeves": [],
+    }
+
+    if include_deep_sector_rollup and tickers:
+        try:
+            from backend.alphavantage_sector_bridge import per_ticker_normalized_gics_maps_for_tickers
+
+            maps = per_ticker_normalized_gics_maps_for_tickers(tickers)
+            rolled = _rollup_current_gics_sector_weights(current_w, maps)
+            out["current_gics_sector_weights"] = rolled
+            over = [
+                {"sector": s, "weight": round(w, 6)}
+                for s, w in rolled.items()
+                if float(w) > 0.20 + 1e-9
+            ]
+            out["sectors_over_20pct_current"] = over
+            out["sector_rollup_available"] = True
+            if over:
+                over_secs = {str(r["sector"]) for r in over}
+                hints: List[Dict[str, Any]] = []
+                for t in tickers:
+                    smap = maps.get(t) or {}
+                    try:
+                        wt = float(current_w.get(t, 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if wt <= 0:
+                        continue
+                    for sec in over_secs:
+                        try:
+                            frac = float(smap.get(sec, 0) or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        c = wt * frac
+                        if c >= 0.01:
+                            hints.append(
+                                {
+                                    "ticker": t,
+                                    "sector": sec,
+                                    "approx_portfolio_weight_in_this_sector_sleeve": round(c, 6),
+                                }
+                            )
+                hints.sort(key=lambda x: -float(x["approx_portfolio_weight_in_this_sector_sleeve"]))
+                out["tickers_notable_for_overweight_sector_sleeves"] = hints[:18]
+        except Exception as exc:
+            out["sector_rollup_note"] = f"Sector rollup failed: {exc}"
+            _log.warning("balance_basics sector rollup: %s", exc)
+    elif not include_deep_sector_rollup:
+        out["sector_rollup_note"] = (
+            "Current GICS sector mix is omitted this turn. Ask about rebalancing, diversification, or sector "
+            "concentration to compute a mark-to-market sector rollup (uses cached per-ticker sector maps when available)."
+        )
+
+    recs: List[str] = []
+    if not out["etf_count_passes_lt_8"]:
+        recs.append(
+            f"ETF count: you show {etf_count} ETF(s) in the known-ETF set; guideline is fewer than eight distinct ETFs. "
+            "Consider consolidating overlapping funds or replacing narrow sleeves with fewer, broader holdings (and verify any missing names are ETFs so they count)."
+        )
+    if stock_over_5:
+        names = ", ".join(x["ticker"] for x in stock_over_5[:8])
+        recs.append(
+            "Single-name concentration: trim or spread "
+            f"{names}{'…' if len(stock_over_5) > 8 else ''} — each is over 5% of the portfolio while not classified as an ETF."
+        )
+    for rowx in out.get("sectors_over_20pct_current") or []:
+        recs.append(
+            f"Sector sleeve: {rowx['sector']} is about {100 * float(rowx['weight']):.1f}% of the portfolio (>20% guideline); consider trimming or diversifying that sleeve."
+        )
+    out["balance_recommendations"] = recs
+    return out
+
+
+def _annotate_prescriptive_trades_with_balance_context(
+    trades: List[Dict[str, Any]],
+    rebalance_watch: List[Dict[str, Any]],
+    balance_basics: Dict[str, Any],
+) -> None:
+    """Mutates each trade dict with flags so the model can align BUY/SELL with 5-25, sector, ETF, and single-stock rules."""
+    watch = {str(d.get("ticker") or "").strip().upper() for d in rebalance_watch}
+    conc = balance_basics.get("non_etf_positions_over_5pct_current_weight") or []
+    conc_set = {str(x.get("ticker") or "").strip().upper() for x in conc}
+    sector_hints = balance_basics.get("tickers_notable_for_overweight_sector_sleeves") or []
+    sector_flag = {str(h.get("ticker") or "").strip().upper() for h in sector_hints}
+    for tr in trades:
+        t = str(tr.get("ticker") or "").strip().upper()
+        tr["bernstein_5_25_watchlist_includes_ticker"] = t in watch
+        is_etf = _is_mrbrown_etf_ticker(t)
+        tr["known_etf_for_balance_rules"] = is_etf
+        tr["non_etf_over_5pct_current_weight_guideline"] = (t in conc_set) and (not is_etf)
+        tr["material_contributor_to_sector_sleeve_over_20pct"] = t in sector_flag
+
+
+def _bernstein_5_25_facts_summary() -> Dict[str, Any]:
+    return {
+        "name": "Bernstein-style adaptive 5-25 bands (vs saved initial weights)",
+        "band_large_position": "If initial_weight > 20%: flag when absolute drift |current_weight − initial_weight| exceeds 5 percentage points.",
+        "band_smaller_position": "If 0 < initial_weight ≤ 20%: flag when |current_weight − initial_weight| / initial_weight exceeds 25%.",
+        "matches_json_key": "rebalance_watchlist",
+    }
 
 
 def _gemini_api_key() -> Optional[str]:
@@ -104,7 +407,12 @@ def _portfolio_drivers(
     }
 
 
-def compute_portfolio_facts(portfolio_id: str, user_id: str) -> Dict[str, Any]:
+def compute_portfolio_facts(
+    portfolio_id: str,
+    user_id: str,
+    *,
+    include_balance_deep: bool = False,
+) -> Dict[str, Any]:
     row = db_module.get_portfolio(portfolio_id)
     if not row or row.get("user_id") != user_id:
         return {"error": "Portfolio not found or not authorized.", "portfolio_id": portfolio_id}
@@ -191,6 +499,13 @@ def compute_portfolio_facts(portfolio_id: str, user_id: str) -> Dict[str, Any]:
         max(float(tr["target_value_usd"]) - float(tr["current_value_usd"]), 0.0) for tr in trades if tr["side"] == "BUY"
     )
 
+    balance_basics = _compute_balance_basics(
+        row,
+        current_w,
+        include_deep_sector_rollup=include_balance_deep,
+    )
+    _annotate_prescriptive_trades_with_balance_context(trades, rebalance_watch, balance_basics)
+
     return {
         "portfolio_id": portfolio_id,
         "portfolio_name": row.get("portfolio_name"),
@@ -200,6 +515,7 @@ def compute_portfolio_facts(portfolio_id: str, user_id: str) -> Dict[str, Any]:
         "initial_weights": {k: round(v, 6) for k, v in initial_w.items()},
         "current_weights": {k: round(v, 6) for k, v in current_w.items()},
         "drift_by_ticker": drift,
+        "bernstein_5_25_rule": _bernstein_5_25_facts_summary(),
         "rebalance_watchlist": rebalance_watch,
         "prescriptive_trades_to_initial_weights": trades,
         "rebalance_cashflow_check_usd": {
@@ -208,6 +524,7 @@ def compute_portfolio_facts(portfolio_id: str, user_id: str) -> Dict[str, Any]:
         },
         "change_1d": _portfolio_drivers(hist, latest_hist_point, 1),
         "change_7d": _portfolio_drivers(hist, latest_hist_point, 7),
+        "balance_basics": balance_basics,
     }
 
 
@@ -263,13 +580,14 @@ def build_mr_brown_facts_bundle(
     portfolio_ids: Optional[List[str]] = None,
     growth_portfolio_id: Optional[str] = None,
     retirement_portfolio_id: Optional[str] = None,
+    include_balance_deep: bool = False,
 ) -> Dict[str, Any]:
     out: Dict[str, Any] = {"page": page, "user_id": user_id, "portfolios": []}
     if page == "portfolio":
         if not portfolio_id:
             out["note"] = "No portfolio selected on this page."
             return out
-        out["portfolios"].append(compute_portfolio_facts(portfolio_id, user_id))
+        out["portfolios"].append(compute_portfolio_facts(portfolio_id, user_id, include_balance_deep=include_balance_deep))
         return out
     if page == "net_worth":
         out["net_worth"] = _net_worth_summary(user_id)
@@ -278,16 +596,20 @@ def build_mr_brown_facts_bundle(
             prow = db_module.get_portfolio(pid)
             if not prow or prow.get("user_id") != user_id:
                 continue
-            out["portfolios"].append(compute_portfolio_facts(pid, user_id))
+            out["portfolios"].append(compute_portfolio_facts(pid, user_id, include_balance_deep=include_balance_deep))
         if not out["portfolios"] and not out.get("net_worth", {}).get("error"):
             out["note"] = "Link saved portfolios on the net worth sheet to analyze their drift here."
         return out
     if page == "life_plan":
         out["net_worth"] = _net_worth_summary(user_id)
         if growth_portfolio_id:
-            out["portfolios"].append(compute_portfolio_facts(growth_portfolio_id, user_id))
+            out["portfolios"].append(
+                compute_portfolio_facts(growth_portfolio_id, user_id, include_balance_deep=include_balance_deep)
+            )
         if retirement_portfolio_id:
-            out["portfolios"].append(compute_portfolio_facts(retirement_portfolio_id, user_id))
+            out["portfolios"].append(
+                compute_portfolio_facts(retirement_portfolio_id, user_id, include_balance_deep=include_balance_deep)
+            )
         if not out["portfolios"]:
             out["note"] = "Connect growth and retirement portfolios on this page for drift and rebalance context."
         return out
@@ -302,20 +624,22 @@ You have structured FACTS (weights, drift, rebalancing hints, 1d/7d value driver
 Topic scoping (strict — this overrides breadth elsewhere in this prompt):
 - Latest user message is the only scope for this reply. Do not “also” cover other topics they did not ask about in this turn.
 - If they ask about recent performance for a specific window (e.g. last 7 days, past week, yesterday, last day): answer ONLY that window using change_7d or change_1d (and its top_ticker_moves / drivers). Do NOT mention rebalancing, rebalance_watchlist, prescriptive_trades_to_initial_weights, weight drift vs targets, or trade lists unless they explicitly asked about those in the same message.
-- If they ask about rebalancing, trades back to targets, drift vs initial weights, or what to buy/sell: use drift / rebalance_watchlist / prescriptive_trades as needed. Do NOT add a separate 7-day or 1-day performance section unless they asked about recent performance too.
+- If they ask about rebalancing, trades back to targets, drift vs initial weights, or what to buy/sell: integrate **all** of the following before naming tickers—do not rely on prescriptive share deltas alone: (A) **Bernstein 5-25** adaptive bands: read `bernstein_5_25_rule` and `rebalance_watchlist` (same thresholds); prioritize explaining and trading names on that watchlist when they drive drift. (B) **Sector sleeves**: `balance_basics.sectors_over_20pct_current` vs 20% cap when `sector_rollup_available`; use `tickers_notable_for_overweight_sector_sleeves` to name trim/rotation candidates that inflate overweight sectors. (C) **ETF count**: `etf_distinct_count` vs `etf_count_passes_lt_8` (fewer than eight distinct known ETFs); if the guideline fails, favor consolidation SELLs among redundant ETFs and avoid BUYs that add another distinct ETF unless you explain the trade-off. (D) **Individual stocks**: `non_etf_positions_over_5pct_current_weight`—non-ETFs over 5% current weight are concentration risks; prefer trimming SELLs there and flag any prescriptive BUY that would add to a name already flagged with `non_etf_over_5pct_current_weight_guideline` on that ticker’s trade row. Use `drift_by_ticker` / `prescriptive_trades_to_initial_weights` as the mechanical path back to saved targets, **cross-check each listed trade’s** `bernstein_5_25_watchlist_includes_ticker`, `material_contributor_to_sector_sleeve_over_20pct`, `known_etf_for_balance_rules`, and `non_etf_over_5pct_current_weight_guideline` flags, and reconcile: if a BUY worsens concentration or sector/ETF guidelines, say so and suggest an alternative sequencing (e.g. trim concentration and overweight sleeves first, then rebuild toward targets). Still mirror the estimated share quantities from prescriptive_trades when you give trade wording, unless you explicitly justify deferring a leg. Use `balance_basics.balance_recommendations` as deterministic hints. Do NOT add a separate 7-day or 1-day performance section unless they asked about recent performance too.
 - If they ask one narrow fact (e.g. “how did it do last 7 days?”), keep the answer short (about 2–6 sentences). No follow-on topics (“you might also…”, “additionally consider rebalancing…”) unless they asked.
 
 FACTS reference (do not re-derive thresholds; only cite when relevant to the question):
 - Current weight per ticker: latest marks vs portfolio value vs saved initial weights.
-- rebalance_watchlist: (initial_weight > 20% AND |Δweight| > 5pp) OR (initial_weight < 20% AND |Δweight|/initial_weight > 25%).
-- prescriptive_trades_to_initial_weights: share deltas to move toward initial targets; rebalance_cashflow_check_usd has approximate sell/buy notionals.
+- bernstein_5_25_rule: short definition; same logic as rebalance_watchlist.
+- rebalance_watchlist: (initial_weight > 20% AND |Δweight| > 5pp) OR (0 < initial_weight < 20% AND |Δweight|/initial_weight > 25%).
+- prescriptive_trades_to_initial_weights: share deltas to move toward initial targets; each row may include bernstein_5_25_watchlist_includes_ticker, material_contributor_to_sector_sleeve_over_20pct, known_etf_for_balance_rules, non_etf_over_5pct_current_weight_guideline—use these when recommending BUY/SELL tickers. rebalance_cashflow_check_usd has approximate sell/buy notionals.
 - change_1d / change_7d: portfolio value change over that span and top_ticker_moves.
+- balance_basics: structured checks for sleeve balance—use balance_recommendations as deterministic hints; respect sector_rollup_note when sector mix is not rolled up this turn; tickers_notable_for_overweight_sector_sleeves names equity/ETF tickers that materially contribute to a sector sleeve already above 20%.
 
 Rules:
 - Ground every number you state in the FACTS JSON. Do not invent prices, weights, or history.
 - If the asked window has insufficient history, say so briefly for that window only; do not pivot to unrelated topics.
-- When (and only when) the user asked for trades / rebalance: mirror prescriptive_trades_to_initial_weights, label as estimates, wording like “You would execute the following estimated trades…”, e.g. “SELL an estimated 5.25 shares MSFT; BUY an estimated 0.15 shares VOO”.
-- When (and only when) you explain rebalancing logic in that trade context, state it is informed by the “Bernstein 5-25 adaptive rule” watch thresholds in FACTS.
+- When (and only when) the user asked for trades / rebalance: mirror prescriptive_trades_to_initial_weights (with the guideline flags above woven into the narrative order: 5-25 watchlist and concentration/sector/ETF issues first when applicable), label as estimates, wording like “You would execute the following estimated trades…”, e.g. “SELL an estimated 5.25 shares MSFT; BUY an estimated 0.15 shares VOO”.
+- When (and only when) you explain rebalancing logic in that trade context, tie drift triggers to `bernstein_5_25_rule` / rebalance_watchlist and the sector / single-stock / ETF guidelines in FACTS—not generic advice.
 - Tone: professional, direct; prescriptive only when they asked for trades or rebalance.
 """
 
@@ -338,6 +662,7 @@ def run_mr_brown_chat(
         portfolio_ids=portfolio_ids,
         growth_portfolio_id=growth_portfolio_id,
         retirement_portfolio_id=retirement_portfolio_id,
+        include_balance_deep=user_seeks_rebalance_or_balance_advice(message),
     )
     facts_json = json.dumps(facts, default=str, indent=2)
     hist_lines: List[str] = []

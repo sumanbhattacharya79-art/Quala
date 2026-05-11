@@ -612,6 +612,8 @@ export function CompareView({
   connectPairScenarioError,
   connectPairScenarioSuccess,
   intakeFrozen,
+  /** If >= 1, block saving a *new* life plan until the user deletes the existing one (server enforces the same). */
+  existingSavedLifePlanCount = 0,
   showLifePlannerSavedBar,
   onLifePlannerDelete,
   frozenGrowthMedianAtRetirementUsd,
@@ -646,7 +648,10 @@ export function CompareView({
   const intakeFormsReadOnly = true;
   const bothChartsReady =
     compareBacktestArtifactsReady(growthArtifacts) && compareBacktestArtifactsReady(retireArtifacts);
-  const saveLifeScenarioDisabled = intakeFrozen || !bothChartsReady || !!connectPairScenarioSaving;
+  const saveNewLifePlanBlocked =
+    !intakeFrozen && typeof existingSavedLifePlanCount === "number" && existingSavedLifePlanCount >= 1;
+  const saveLifeScenarioDisabled =
+    intakeFrozen || !bothChartsReady || !!connectPairScenarioSaving || saveNewLifePlanBlocked;
 
   const growthAtRetire = useMemo(() => extractGrowthTerminalValueP50(leftArt), [leftArt]);
   const retirementSuccessRate = useMemo(() => extractRetirementProbabilityOfSuccess(rightArt), [rightArt]);
@@ -928,8 +933,27 @@ export function CompareView({
                 <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px", lineHeight: 1.45 }}>
                   One name saves both the <strong style={{ color: "var(--text)" }}>growth</strong> (left) and{" "}
                   <strong style={{ color: "var(--text)" }}>retirement</strong> (right) intakes. It appears under{" "}
-                  <strong style={{ color: "var(--text)" }}>Life planner</strong> in the sidebar.
+                  <strong style={{ color: "var(--text)" }}>Life planner</strong> in the sidebar. You can keep{" "}
+                  <strong style={{ color: "var(--text)" }}>only one</strong> saved life plan: delete the current one
+                  there before saving a new plan.
                 </p>
+                {saveNewLifePlanBlocked ? (
+                  <p
+                    style={{
+                      fontSize: 12,
+                      color: "#c97a7a",
+                      margin: "0 0 12px",
+                      lineHeight: 1.45,
+                      padding: "10px 12px",
+                      background: "rgba(201, 122, 122, 0.12)",
+                      borderRadius: 6,
+                      border: "1px solid rgba(201, 122, 122, 0.35)",
+                    }}
+                  >
+                    A life plan is already saved. Open it from <strong style={{ color: "var(--text)" }}>Life planner</strong>{" "}
+                    in the sidebar, use <strong style={{ color: "var(--text)" }}>Delete</strong>, then return here and save.
+                  </p>
+                ) : null}
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-end", marginBottom: 12 }}>
                   <label style={{ flex: "1 1 240px", minWidth: 200 }}>
                     Life scenario name
@@ -948,6 +972,13 @@ export function CompareView({
                     className="form-primary-btn"
                     disabled={saveLifeScenarioDisabled}
                     onClick={onSavePairScenarios}
+                    title={
+                      saveNewLifePlanBlocked
+                        ? "Delete your saved life plan in the sidebar first"
+                        : !bothChartsReady
+                          ? "Run Continue so both charts finish first"
+                          : ""
+                    }
                   >
                     {connectPairScenarioSaving ? "Saving…" : "Save life scenario"}
                   </button>

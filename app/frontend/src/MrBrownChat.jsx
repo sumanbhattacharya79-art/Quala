@@ -5,7 +5,8 @@ import { AdvisorModelOutputDisclaimer } from "./advisorDisclaimer.jsx";
 const SUGGESTED_QUESTIONS = [
   "How did my portfolio change in the last 7 days?",
   "How did my portfolio change in the last day?",
-  "Do I need to rebalance my portfolio?",
+  "Is my portfolio balanced on sectors, ETFs, and single-stock weights?",
+  "How should I rebalance my portfolio?",
   "Which tickers moved my weights the most?",
   "What is 5-25 rebalancing rule?",
 ];

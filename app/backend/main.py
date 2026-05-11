@@ -114,6 +114,7 @@ from backend.db import (  # noqa: E402
     save_analyzed_portfolio,
     save_life_scenario_bundle,
     update_life_scenario_frozen_growth_median,
+    update_life_scenario_planner_intakes,
     save_portfolio,
     save_scenario,
     save_user_intake,
@@ -865,6 +866,9 @@ class PortfolioBacktestRequest(BaseModel):
     """Request to run backtest for a saved portfolio."""
     user_id: str  # must match portfolio owner
     intake: Optional[Dict[str, object]] = None  # optional: form values (inflation, horizon, etc.); merged over DB intake
+    # Growth: when True (default), MC starting notional uses live portfolio_value over merged intake initial_value.
+    # Set False after what-if edits so the submitted intake initial_value is honored.
+    use_portfolio_mark_for_initial: bool = True
 
 
 @app.delete("/api/portfolio/saved/{portfolio_id}")
@@ -923,6 +927,7 @@ def run_portfolio_backtest(portfolio_id: str, payload: PortfolioBacktestRequest)
         is_retirement=is_retirement,
         portfolio_sector_weights=sec_w if isinstance(sec_w, dict) else None,
         portfolio_industry_weights=ind_w if isinstance(ind_w, dict) else None,
+        use_portfolio_mark_for_initial=payload.use_portfolio_mark_for_initial,
     )
     if not artifacts:
         raise HTTPException(status_code=500, detail="Backtest failed or returned no results")
@@ -1000,6 +1005,7 @@ def update_saved_portfolio_composition(
         is_retirement=is_retirement,
         portfolio_sector_weights=sec_w if isinstance(sec_w, dict) else None,
         portfolio_industry_weights=ind_w if isinstance(ind_w, dict) else None,
+        use_portfolio_mark_for_initial=True,
     )
     if not artifacts:
         raise HTTPException(status_code=500, detail="Backtest failed or returned no results")
@@ -1086,6 +1092,15 @@ class UpdateLifeScenarioFrozenMedianRequest(BaseModel):
     retirement_success_percent: Optional[float] = None
 
 
+class UpdateLifePlannerIntakesRequest(BaseModel):
+    """Update life planner intakes only (does not modify linked growth/retirement saved_scenarios rows)."""
+
+    user_id: str
+    growth_intake: Dict[str, object]
+    retirement_intake: Dict[str, object]
+    name: Optional[str] = None
+
+
 @app.post("/api/life-scenario/save")
 def save_life_scenario_endpoint(payload: SaveLifeScenarioRequest) -> Dict[str, object]:
     try:
@@ -1121,6 +1136,23 @@ def get_life_scenario_endpoint(
     if not row:
         raise HTTPException(status_code=404, detail="Life scenario not found")
     return row
+
+
+@app.put("/api/life-scenario/{life_scenario_id}/planner-intakes")
+def update_life_planner_intakes_endpoint(
+    life_scenario_id: str,
+    payload: UpdateLifePlannerIntakesRequest,
+) -> Dict[str, object]:
+    ok = update_life_scenario_planner_intakes(
+        life_scenario_id,
+        payload.user_id,
+        dict(payload.growth_intake),
+        dict(payload.retirement_intake),
+        name=payload.name,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Life scenario not found")
+    return {"status": "ok"}
 
 
 @app.put("/api/life-scenario/{life_scenario_id}/frozen-growth-median")

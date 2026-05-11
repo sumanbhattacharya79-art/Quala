@@ -84,29 +84,7 @@ import QUALA_TNC_FULL_TEXT from "./legal/terms-conditions.md?raw";
 import { QUALA_TNC_VERSION } from "./legalConstants.js";
 import { AdvisorModelOutputDisclaimer } from "./advisorDisclaimer.jsx";
 import { LegalStickyFooter } from "./legalFooter.jsx";
-
-const SIDEBAR_PLANNER_DIALS_LS_PREFIX = "portfolio-optimizer-sidebar-planner-dials:";
-
-function readSidebarPlannerDialsFromStorage(uid) {
-  if (!uid || typeof localStorage === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(SIDEBAR_PLANNER_DIALS_LS_PREFIX + uid);
-    if (!raw) return {};
-    const o = JSON.parse(raw);
-    return o && typeof o === "object" ? o : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeSidebarPlannerDialsToStorage(uid, data) {
-  if (!uid || typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(SIDEBAR_PLANNER_DIALS_LS_PREFIX + uid, JSON.stringify(data));
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
+import { AboutUsModalBody } from "./AboutUsModalBody.jsx";
 
 function useSessionId() {
   // New session ID on every load: never read or write session to localStorage so it cannot persist
@@ -936,10 +914,7 @@ function PricingPlansModalBody() {
 const INFO_PAGES = {
   about: {
     title: "About us",
-    paragraphs: [
-      "Portfolio Optimizer helps you build and stress-test portfolios through a guided chat — from intake to Monte Carlo backtesting and saved scenarios.",
-      "We focus on clear allocations, historical paths, and transparent assumptions rather than one-size-fits-all picks.",
-    ],
+    paragraphs: [],
   },
   faq: {
     title: "FAQ",
@@ -1185,6 +1160,8 @@ export default function App() {
   const [waitingForAnalyst, setWaitingForAnalyst] = useState(false);
   // Always start from a blank intake form on hard refresh.
   const [formState, setFormState] = useState(() => ({ ...defaultFormState }));
+  const formStateRef = useRef(formState);
+  formStateRef.current = formState;
   const [currentIntent, setCurrentIntent] = useState("intake");
   const [savedIntakeMessage, setSavedIntakeMessage] = useState("");
   const [userFilledIntakeForm, setUserFilledIntakeForm] = useState(false);
@@ -1226,6 +1203,8 @@ export default function App() {
   const [portfolioWhatIfMode, setPortfolioWhatIfMode] = useState(false);
   const [portfolioSaveAsName, setPortfolioSaveAsName] = useState("");
   const [portfolioSaveAsSaving, setPortfolioSaveAsSaving] = useState(false);
+  /** PUT /api/scenario/:id when viewing a saved scenario (e.g. "retire 1 — …") so what-if edits persist. */
+  const [portfolioUpdateScenarioSaving, setPortfolioUpdateScenarioSaving] = useState(false);
   const [savedScenarios, setSavedScenarios] = useState([]);
   const [savedLifeScenarios, setSavedLifeScenarios] = useState([]);
   const [selectedLifeScenarioId, setSelectedLifeScenarioId] = useState(null);
@@ -1284,6 +1263,10 @@ export default function App() {
   const connectChartsHydrateInFlightRef = useRef(false);
   /** Caps retries when artifacts never become chart-ready (avoids a tight loop). */
   const connectChartsHydrateAttemptsRef = useRef({ lifeId: null, count: 0 });
+  /** Ignore stale GET /life-scenario responses if the user opened a different plan while in flight. */
+  const openLifeScenarioRequestIdRef = useRef(0);
+  /** When opening a saved life plan, planner-only intakes (API) override scenario rows for connect forms. */
+  const connectPlannerIntakesRef = useRef({ g: null, r: null });
 
   /** Skip redundant restore when userId is unchanged (avoids resetting compare selections every render). */
   const prevCompareUserIdRef = useRef(undefined);
@@ -1933,7 +1916,7 @@ export default function App() {
 
   /** Run MC/backtest for a saved portfolio using an explicit form snapshot (avoids stale React state after load). */
   const runPortfolioBacktestWithFormSnapshot = useCallback(
-    async (portfolioId, formSnapshot, loadToken) => {
+    async (portfolioId, formSnapshot, loadToken, usePortfolioMarkForInitial = true) => {
       const uid = userId ?? localStorage.getItem(USER_ID_KEY);
       if (!uid || !portfolioId) return;
       setPortfolioViewLoading(true);
@@ -1943,6 +1926,7 @@ export default function App() {
         const res = await postJson(`/api/portfolio/saved/${encodeURIComponent(portfolioId)}/backtest`, {
           user_id: uid,
           intake,
+          use_portfolio_mark_for_initial: usePortfolioMarkForInitial,
         });
         if (loadToken !== undefined && loadToken !== portfolioViewLoadTokenRef.current) {
           return;
@@ -1981,8 +1965,11 @@ export default function App() {
   const runPortfolioMonteCarloBacktest = useCallback(async () => {
     if (!selectedPortfolioId) return;
     const tok = portfolioViewLoadTokenRef.current;
-    await runPortfolioBacktestWithFormSnapshot(selectedPortfolioId, formState, tok);
-  }, [selectedPortfolioId, formState, runPortfolioBacktestWithFormSnapshot]);
+    // Latest form values (avoids stale closure if a field updated in the same frame as Submit).
+    const snapshot = formStateRef.current;
+    // Honor edited intake (e.g. initial investment + what-if rows); do not replace initial_value with live portfolio_value.
+    await runPortfolioBacktestWithFormSnapshot(selectedPortfolioId, snapshot, tok, false);
+  }, [selectedPortfolioId, runPortfolioBacktestWithFormSnapshot]);
 
   const openNetWorthView = useCallback(() => {
     portfolioViewLoadTokenRef.current += 1;
@@ -2043,6 +2030,7 @@ export default function App() {
     setConnectLifeScenarioNameInput("");
     setCompareNotice(null);
     setCompareRetireSyncMessage(null);
+    connectPlannerIntakesRef.current = { g: null, r: null };
   }, []);
 
   const openConnectGrowthRetireView = useCallback(() => {
@@ -2085,16 +2073,24 @@ export default function App() {
       setPortfolioWhatIfMode(false);
       setConnectPairScenarioError(null);
       setConnectPairScenarioSuccess(null);
+      const reqId = ++openLifeScenarioRequestIdRef.current;
       try {
         const row = await getJson(
-          `/api/life-scenario/${encodeURIComponent(lifeScenarioId)}?user_id=${encodeURIComponent(uid)}`,
+          `/api/life-scenario/${encodeURIComponent(lifeScenarioId)}?user_id=${encodeURIComponent(uid)}&_=${Date.now()}`,
         );
+        if (reqId !== openLifeScenarioRequestIdRef.current) return;
         const g = row.growth;
         const r = row.retirement;
         if (!g?.portfolio_id || !r?.portfolio_id || !g?.scenario_id || !r?.scenario_id) {
           addMessage("error", "Life scenario data is incomplete.");
           return;
         }
+        const gp = row.growth_planner_intake;
+        const rp = row.retirement_planner_intake;
+        connectPlannerIntakesRef.current = {
+          g: gp && typeof gp === "object" ? gp : null,
+          r: rp && typeof rp === "object" ? rp : null,
+        };
         compareConnectBacktestTokenRef.current += 1;
         connectChartsHydrateInFlightRef.current = false;
         connectChartsHydrateAttemptsRef.current = { lifeId: null, count: 0 };
@@ -2272,6 +2268,7 @@ export default function App() {
       setConnectPairScenarioError(null);
       setConnectPairScenarioSuccess(null);
       setSelectedLifeScenarioId(null);
+      connectPlannerIntakesRef.current = { g: null, r: null };
       const rawSid = payload.scenarioId ?? payload.scenario_id ?? null;
       const sel = {
         kind: payload.kind,
@@ -2369,10 +2366,23 @@ export default function App() {
       setCompareRetireArtifacts(null);
       setCompareRetireSyncMessage(null);
       try {
-        const [gForm, rForm] = await Promise.all([
+        const [gLoaded, rLoaded] = await Promise.all([
           loadFormFromCompareSel(compareLeftSel),
           loadFormFromCompareSel(compareRightSel),
         ]);
+        let gForm = gLoaded;
+        let rForm = rLoaded;
+        if (connectLifePlannerFrozen && selectedLifeScenarioId) {
+          const { g, r } = connectPlannerIntakesRef.current || {};
+          if (g && typeof g === "object") {
+            const merged = formStateFromIntakeApi(g);
+            if (merged) gForm = merged;
+          }
+          if (r && typeof r === "object") {
+            const merged = formStateFromIntakeApi(r);
+            if (merged) rForm = merged;
+          }
+        }
         if (!cancelled) {
           setCompareGrowthForm(gForm);
           setCompareRetireForm(rForm);
@@ -2390,7 +2400,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [view, compareLeftSel, compareRightSel, userId, loadFormFromCompareSel]);
+  }, [view, compareLeftSel, compareRightSel, userId, loadFormFromCompareSel, connectLifePlannerFrozen, selectedLifeScenarioId]);
 
   /** Saved life plan (frozen): column titles use portfolio/scenario name without "{life} — " prefix. */
   useEffect(() => {
@@ -2639,6 +2649,19 @@ export default function App() {
       const uid = userId ?? localStorage.getItem(USER_ID_KEY);
       if (!uid || !compareLeftSel || !compareRightSel || !compareGrowthForm || !compareRetireForm) return;
       if (connectLifePlannerFrozen) return;
+      const isUpdateExisting =
+        !!(selectedLifeScenarioId && connectLinkedGrowthScenarioId && connectLinkedRetirementScenarioId);
+      if (
+        !isUpdateExisting &&
+        Array.isArray(savedLifeScenarios) &&
+        savedLifeScenarios.length >= 1
+      ) {
+        const msg =
+          "You can only keep one life plan. Open your saved plan in Life planner and use Delete, then save this one.";
+        setConnectPairScenarioError(msg);
+        addMessage("error", msg);
+        return;
+      }
       setConnectPairScenarioSaving(true);
       setConnectPairScenarioError(null);
       setConnectPairScenarioSuccess(null);
@@ -2650,15 +2673,23 @@ export default function App() {
         const s = String(id).trim();
         return s || undefined;
       };
+      /** Drop stale scenario ids that do not belong to the selected portfolio (avoids wrong reuse on save). */
+      const scenarioIdIfBelongsToPortfolio = (sel) => {
+        const sid = trimSid(sel?.scenarioId);
+        if (!sid || !sel?.portfolioId) return undefined;
+        const row = Array.isArray(savedScenarios)
+          ? savedScenarios.find((s) => String(s.scenario_id) === String(sid))
+          : null;
+        if (!row || String(row.portfolio_id) !== String(sel.portfolioId)) return undefined;
+        return sid;
+      };
       try {
         if (selectedLifeScenarioId && connectLinkedGrowthScenarioId && connectLinkedRetirementScenarioId) {
-          await putJson(`/api/scenario/${encodeURIComponent(connectLinkedGrowthScenarioId)}`, {
+          await putJson(`/api/life-scenario/${encodeURIComponent(selectedLifeScenarioId)}/planner-intakes`, {
             user_id: uid,
-            intake: intakeG,
-          });
-          await putJson(`/api/scenario/${encodeURIComponent(connectLinkedRetirementScenarioId)}`, {
-            user_id: uid,
-            intake: intakeR,
+            growth_intake: intakeG,
+            retirement_intake: intakeR,
+            name: lifeName,
           });
           fetchSavedScenarios(uid);
           fetchSavedLifeScenarios(uid);
@@ -2694,9 +2725,9 @@ export default function App() {
             frozen_growth_median_at_retirement_usd:
               frozenMedian != null && Number.isFinite(frozenMedian) && frozenMedian > 0 ? frozenMedian : undefined,
             retirement_success_percent: retireDialPct != null ? retireDialPct : undefined,
-            // Reuse dropped scenario rows whenever scenarioId is set (not only when source==="scenario") so we never INSERT duplicates.
-            growth_scenario_id: trimSid(compareLeftSel.scenarioId),
-            retirement_scenario_id: trimSid(compareRightSel.scenarioId),
+            // Reuse scenario rows only when id matches the dropped portfolio (scenario_id ≠ portfolio_id; both must be consistent).
+            growth_scenario_id: scenarioIdIfBelongsToPortfolio(compareLeftSel),
+            retirement_scenario_id: scenarioIdIfBelongsToPortfolio(compareRightSel),
           });
           resetOpenPlannerLanding();
           fetchSavedScenarios(uid);
@@ -2728,6 +2759,8 @@ export default function App() {
       connectLifeScenarioNameInput,
       connectLifePlannerFrozen,
       selectedLifeScenarioId,
+      savedLifeScenarios,
+      savedScenarios,
       connectLinkedGrowthScenarioId,
       connectLinkedRetirementScenarioId,
       buildIntakeFromFormState,
@@ -2756,12 +2789,20 @@ export default function App() {
     [compareRetireArtifacts],
   );
 
-  /** Latest saved life scenario (API order: created_at DESC): dial metrics for welcome/sidebar after login. */
-  const savedLifeScenarioDialSnapshot = useMemo(() => {
-    if (!Array.isArray(savedLifeScenarios) || savedLifeScenarios.length === 0) {
-      return { goal: null, retire: null };
+  /** Life row used for sidebar dials: prefer the open/selected life plan so multiple saved plans stay distinct. */
+  const sidebarLifeDialSourceRow = useMemo(() => {
+    if (!Array.isArray(savedLifeScenarios) || savedLifeScenarios.length === 0) return null;
+    if (selectedLifeScenarioId) {
+      const hit = savedLifeScenarios.find((ls) => String(ls.life_scenario_id) === String(selectedLifeScenarioId));
+      if (hit) return hit;
     }
-    const ls = savedLifeScenarios[0];
+    return savedLifeScenarios[0];
+  }, [savedLifeScenarios, selectedLifeScenarioId]);
+
+  /** Per-life frozen growth median + retirement success from API (each life_scenarios row is separate). */
+  const savedLifeScenarioDialSnapshot = useMemo(() => {
+    const ls = sidebarLifeDialSourceRow;
+    if (!ls) return { goal: null, retire: null };
     const fz = ls.frozen_growth_median_at_retirement_usd;
     const gpId = ls.growth_portfolio_id;
     const pv =
@@ -2773,7 +2814,7 @@ export default function App() {
     const retire =
       rp != null && Number.isFinite(Number(rp)) ? Math.min(100, Math.max(0, Number(rp))) : null;
     return { goal, retire };
-  }, [savedLifeScenarios, savedPortfolios]);
+  }, [sidebarLifeDialSourceRow, savedPortfolios]);
 
   /** Life-owned snapshot scenarios stay in DB for intake/backtests but are hidden under Portfolio (life plan is portfolio-based in the sidebar). */
   const lifePlannerOwnedScenarioIds = useMemo(() => {
@@ -2786,50 +2827,9 @@ export default function App() {
     return set;
   }, [savedLifeScenarios]);
 
-  const [persistedSidebarPlannerDials, setPersistedSidebarPlannerDials] = useState({});
-
-  useEffect(() => {
-    if (!userId) {
-      setPersistedSidebarPlannerDials({});
-      return;
-    }
-    setPersistedSidebarPlannerDials(readSidebarPlannerDialsFromStorage(userId));
-  }, [userId]);
-
-  useEffect(() => {
-    if (!userId) return;
-    const g = welcomeGoalFundedPercent;
-    const r = welcomeRetirementSuccessPercentDial;
-    if (g == null && r == null) return;
-    setPersistedSidebarPlannerDials((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      if (g != null && next.goal !== g) {
-        next.goal = g;
-        changed = true;
-      }
-      if (r != null && next.retire !== r) {
-        next.retire = r;
-        changed = true;
-      }
-      if (!changed) return prev;
-      writeSidebarPlannerDialsToStorage(userId, next);
-      return next;
-    });
-  }, [userId, welcomeGoalFundedPercent, welcomeRetirementSuccessPercentDial]);
-
-  const sidebarGoalFundedPercent =
-    welcomeGoalFundedPercent ??
-    (typeof persistedSidebarPlannerDials.goal === "number" && Number.isFinite(persistedSidebarPlannerDials.goal)
-      ? persistedSidebarPlannerDials.goal
-      : null) ??
-    savedLifeScenarioDialSnapshot.goal;
+  const sidebarGoalFundedPercent = welcomeGoalFundedPercent ?? savedLifeScenarioDialSnapshot.goal;
   const sidebarRetirementSuccessPercent =
-    welcomeRetirementSuccessPercentDial ??
-    (typeof persistedSidebarPlannerDials.retire === "number" && Number.isFinite(persistedSidebarPlannerDials.retire)
-      ? persistedSidebarPlannerDials.retire
-      : null) ??
-    savedLifeScenarioDialSnapshot.retire;
+    welcomeRetirementSuccessPercentDial ?? savedLifeScenarioDialSnapshot.retire;
 
   const handleSbsContinue = useCallback(async () => {
     const uid = userId ?? localStorage.getItem(USER_ID_KEY);
@@ -3243,6 +3243,37 @@ export default function App() {
     portfolioSaveAsName,
     formState,
     buildIntakeFromFormState,
+    fetchSavedScenarios,
+    addMessage,
+  ]);
+
+  /** Persist intake + what-if for the scenario currently open in the sidebar (PUT existing row). */
+  const handlePortfolioUpdateScenario = useCallback(async () => {
+    const uid = userId ?? localStorage.getItem(USER_ID_KEY);
+    if (!uid || !selectedScenarioId) return;
+    setPortfolioUpdateScenarioSaving(true);
+    try {
+      const intake = buildIntakeFromFormState(formStateRef.current);
+      await putJson(`/api/scenario/${encodeURIComponent(selectedScenarioId)}`, {
+        user_id: uid,
+        intake,
+      });
+      await fetchSavedScenarios(uid);
+      const refreshed = await getJson(`/api/scenario/${encodeURIComponent(selectedScenarioId)}`);
+      if (refreshed && typeof refreshed === "object") {
+        setSelectedScenarioRow(refreshed);
+      }
+      const nm = (refreshed && refreshed.scenario_name) || selectedScenarioRow?.scenario_name || selectedScenarioId;
+      addMessage("assistant", `Saved intake for scenario “${nm}”.`, null, null);
+    } catch (err) {
+      addMessage("error", err.message || "Could not save scenario");
+    } finally {
+      setPortfolioUpdateScenarioSaving(false);
+    }
+  }, [
+    userId,
+    selectedScenarioId,
+    selectedScenarioRow?.scenario_name,
     fetchSavedScenarios,
     addMessage,
   ]);
@@ -4268,7 +4299,7 @@ export default function App() {
                   style={{ cursor: "pointer" }}
                   title="Growth and retirement planning in one workspace"
                 >
-                  <span className="portfolio-list-item-label">Open planner</span>
+                  <span className="portfolio-list-item-label">Create plan</span>
                 </div>
                 {savedLifeScenarios.length === 0 ? (
                   <div className="portfolio-list-empty" style={{ fontSize: 11, color: "#666", fontStyle: "italic", marginTop: 6 }}>
@@ -4550,13 +4581,17 @@ export default function App() {
             <div className="modal-overlay" onClick={() => setInfoModal(null)}>
               <div
                 className="login-modal"
-                style={{ maxWidth: infoModal === "pricing" ? 720 : 440 }}
+                style={{
+                  maxWidth: infoModal === "pricing" ? 720 : infoModal === "about" ? 680 : 440,
+                }}
                 onClick={(e) => e.stopPropagation()}
               >
                 <h3 className="login-modal-title">{INFO_PAGES[infoModal].title}</h3>
                 <div style={{ marginBottom: 8 }}>
                   {infoModal === "pricing" ? (
                     <PricingPlansModalBody />
+                  ) : infoModal === "about" ? (
+                    <AboutUsModalBody />
                   ) : (
                     INFO_PAGES[infoModal].paragraphs.map((p, i) => (
                       <p key={i} style={{ fontSize: 13, color: "#aaa", marginBottom: 14, lineHeight: 1.65 }}>
@@ -4621,6 +4656,7 @@ export default function App() {
                 connectPairScenarioError={connectPairScenarioError}
                 connectPairScenarioSuccess={connectPairScenarioSuccess}
                 intakeFrozen={connectLifePlannerFrozen}
+                existingSavedLifePlanCount={savedLifeScenarios.length}
                 showLifePlannerSavedBar={!!selectedLifeScenarioId && connectLifePlannerFrozen}
                 onLifePlannerDelete={() => setShowLifeScenarioDeleteConfirm(true)}
                 frozenGrowthMedianAtRetirementUsd={connectFrozenGrowthMedianUsd}
@@ -5618,6 +5654,25 @@ export default function App() {
                         {portfolioSaveAsSaving ? "Saving…" : "Save as"}
                       </button>
                     </div>
+                  </div>
+                ) : null}
+                {(userId ?? localStorage.getItem(USER_ID_KEY)) && selectedPortfolioId && selectedScenarioId ? (
+                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #1e1e1e" }}>
+                    <div style={{ fontSize: 11, color: "#c8a96e", marginBottom: 8, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                      Save this scenario
+                    </div>
+                    <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 10px", lineHeight: 1.45 }}>
+                      Open scenario: <strong style={{ color: "var(--text)" }}>{selectedScenarioRow?.scenario_name || "…"}</strong>
+                      . <strong style={{ color: "var(--text)" }}>Continue</strong> refreshes charts only; use <strong style={{ color: "var(--text)" }}>Save changes</strong> to persist the current intake and what-if fields to this saved scenario.
+                    </p>
+                    <button
+                      type="button"
+                      className="form-primary-btn"
+                      onClick={handlePortfolioUpdateScenario}
+                      disabled={portfolioUpdateScenarioSaving}
+                    >
+                      {portfolioUpdateScenarioSaving ? "Saving…" : "Save changes"}
+                    </button>
                   </div>
                 ) : null}
               </div>

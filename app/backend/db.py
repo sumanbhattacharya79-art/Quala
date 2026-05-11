@@ -150,6 +150,14 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass
     try:
+        conn.execute("ALTER TABLE life_scenarios ADD COLUMN growth_planner_intake_json TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE life_scenarios ADD COLUMN retirement_planner_intake_json TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
         conn.execute("""
             UPDATE net_worth_entries
             SET created_at = (
@@ -994,6 +1002,17 @@ def _life_bundle_derived_scenario_name(life_nm: str, side: str, portfolio_name: 
     return f"{life_nm} — retire-{slug}"
 
 
+def count_life_scenarios_for_user(user_id: str) -> int:
+    """Number of saved life plans for this user (product limit: at most one)."""
+    init_db()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM life_scenarios WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    return int(row["c"]) if row and row["c"] is not None else 0
+
+
 def life_scenario_name_exists_for_user(user_id: str, name: str) -> bool:
     nm = (name or "").strip()
     if not nm:
@@ -1010,8 +1029,37 @@ def life_scenario_name_exists_for_user(user_id: str, name: str) -> bool:
     return row is not None
 
 
-def _single_scenario_id_for_portfolio(user_id: str, portfolio_id: str) -> Optional[str]:
-    """When a portfolio has exactly one saved scenario, return its id so life-save can UPDATE instead of INSERT."""
+def _baseline_intake_dict_from_portfolio(portfolio_row: Dict[str, Any]) -> Dict[str, Any]:
+    """Portfolio snapshot intake for new saved_scenarios rows; life planner edits live on life_scenarios only."""
+    w = portfolio_row.get("intake")
+    return dict(w) if isinstance(w, dict) else {}
+
+
+def _scenario_referenced_by_any_life(user_id: str, scenario_id: str) -> bool:
+    """True if any life_scenarios row already uses this scenario on either side."""
+    sid = (scenario_id or "").strip()
+    if not sid:
+        return False
+    init_db()
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM life_scenarios
+            WHERE user_id = ? AND (growth_scenario_id = ? OR retirement_scenario_id = ?)
+            """,
+            (user_id, sid, sid),
+        ).fetchone()
+    return row is not None
+
+
+def _auto_link_scenario_id_for_new_life_bundle(user_id: str, portfolio_id: str) -> Optional[str]:
+    """
+    When a portfolio has exactly one saved scenario, return its id so a new life bundle can link
+    without INSERTing a duplicate — unless that scenario is already used as growth or retirement
+    on *any* life plan for this user. Otherwise a second save (portfolio-only drops, same
+    portfolios) would point both life rows at the same pair even when the user intended separate
+    plans. Library scenarios with life_owns=0 still conflict if another life plan already references them.
+    """
     init_db()
     with get_db() as conn:
         rows = conn.execute(
@@ -1022,9 +1070,19 @@ def _single_scenario_id_for_portfolio(user_id: str, portfolio_id: str) -> Option
             """,
             (user_id, portfolio_id),
         ).fetchall()
-    if len(rows) == 1:
-        return str(rows[0]["scenario_id"])
-    return None
+    if len(rows) != 1:
+        return None
+    sid = str(rows[0]["scenario_id"])
+    with get_db() as conn:
+        conflict = conn.execute(
+            """
+            SELECT 1 FROM life_scenarios
+            WHERE user_id = ?
+              AND (growth_scenario_id = ? OR retirement_scenario_id = ?)
+            """,
+            (user_id, sid, sid),
+        ).fetchone()
+    return None if conflict else sid
 
 
 def save_life_scenario_bundle(
@@ -1042,10 +1100,15 @@ def save_life_scenario_bundle(
 ) -> Dict[str, Any]:
     """
     Atomically save growth + retirement scenarios and link them as one life scenario.
-    When growth_scenario_id / retirement_scenario_id are provided (e.g. user dragged existing
-    scenarios in Life planner), those rows are updated in place instead of inserting duplicates.
-    If an id is omitted but that portfolio has exactly one saved scenario, that row is reused
-    (avoids a second scenario when the user dropped the portfolio, not the scenario row).
+    Life-planner-specific intakes (including what-if) are stored on ``life_scenarios`` only
+    (``growth_planner_intake_json`` / ``retirement_planner_intake_json``); linked or new
+    ``saved_scenarios`` rows are never overwritten with planner edits—new scenario rows use
+    the portfolio snapshot intake as ``intake_json`` so portfolio/scenario baselines stay stable.
+    If an id is omitted but that portfolio has exactly one saved scenario that no life plan uses
+    yet, that row is linked without inserting a duplicate. If the sole scenario is already linked
+    from another life row, a new ``saved_scenarios`` row is inserted for this bundle instead.
+    Client-supplied scenario ids that are already used by another life plan are ignored so each
+    new life row can get its own pair when the user saves a second plan on the same portfolios.
     New scenarios use display names derived from the life name and portfolio slug, avoiding
     redundant prefixes (e.g. "retire-retire-1" when the portfolio is "retire 1").
     """
@@ -1053,6 +1116,10 @@ def save_life_scenario_bundle(
     life_nm = (life_name or "").strip()
     if not life_nm:
         raise ValueError("Life scenario name is required.")
+    if count_life_scenarios_for_user(user_id) >= 1:
+        raise ValueError(
+            "Only one life plan can be saved. Delete your current life plan in Life planner, then save again."
+        )
     if life_scenario_name_exists_for_user(user_id, life_nm):
         raise ValueError("That life scenario name is already in use. Try a different name.")
 
@@ -1074,26 +1141,32 @@ def save_life_scenario_bundle(
 
     gsid = (growth_scenario_id or "").strip() or None
     rsid = (retirement_scenario_id or "").strip() or None
-    # Portfolio-only drops omit scenario ids; if there is only one scenario on that portfolio, reuse it
-    # so we do not insert a second parallel scenario (duplicate in the sidebar).
+    # Portfolio-only drops omit scenario ids; reuse the sole scenario only when it is not another
+    # life's owned snapshot (see _auto_link_scenario_id_for_new_life_bundle).
     if not gsid:
-        gsid = _single_scenario_id_for_portfolio(user_id, growth_portfolio_id)
+        gsid = _auto_link_scenario_id_for_new_life_bundle(user_id, growth_portfolio_id)
     if not rsid:
-        rsid = _single_scenario_id_for_portfolio(user_id, retirement_portfolio_id)
+        rsid = _auto_link_scenario_id_for_new_life_bundle(user_id, retirement_portfolio_id)
+    # Drag-and-drop usually sends explicit scenario ids; those still reuse rows unless we drop them
+    # when another life plan already references the same scenario (otherwise life 2 == life 1).
+    if gsid and _scenario_referenced_by_any_life(user_id, gsid):
+        gsid = None
+        gsid = _auto_link_scenario_id_for_new_life_bundle(user_id, growth_portfolio_id)
+    if rsid and _scenario_referenced_by_any_life(user_id, rsid):
+        rsid = None
+        rsid = _auto_link_scenario_id_for_new_life_bundle(user_id, retirement_portfolio_id)
 
     owns_growth = True
     owns_retirement = True
     gid: str
     rid: str
-    g_json = json.dumps(growth_intake)
-    r_json = json.dumps(retirement_intake)
+    planner_g_json = json.dumps(growth_intake)
+    planner_r_json = json.dumps(retirement_intake)
 
     if gsid:
         gs = get_scenario(gsid)
         if not gs or gs.get("user_id") != user_id or gs.get("portfolio_id") != growth_portfolio_id:
             raise ValueError("Growth scenario not found or does not match the growth portfolio.")
-        if not update_scenario(gsid, user_id, growth_intake, description):
-            raise ValueError("Could not update growth scenario intake.")
         gid = gsid
         owns_growth = False
         sname_g = (gs.get("scenario_name") or sname_g).strip() or sname_g
@@ -1108,8 +1181,6 @@ def save_life_scenario_bundle(
         rs = get_scenario(rsid)
         if not rs or rs.get("user_id") != user_id or rs.get("portfolio_id") != retirement_portfolio_id:
             raise ValueError("Retirement scenario not found or does not match the retirement portfolio.")
-        if not update_scenario(rsid, user_id, retirement_intake, description):
-            raise ValueError("Could not update retirement scenario intake.")
         rid = rsid
         owns_retirement = False
         sname_r = (rs.get("scenario_name") or sname_r).strip() or sname_r
@@ -1138,6 +1209,8 @@ def save_life_scenario_bundle(
         except (TypeError, ValueError):
             retire_pct = None
 
+    g_snap = json.dumps(_baseline_intake_dict_from_portfolio(g_row))
+    r_snap = json.dumps(_baseline_intake_dict_from_portfolio(r_row))
     with get_db() as conn:
         if owns_growth:
             conn.execute(
@@ -1146,7 +1219,7 @@ def save_life_scenario_bundle(
                 (scenario_id, portfolio_id, user_id, scenario_name, portfolio_name, description, intake_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (gid, growth_portfolio_id, user_id, sname_g, g_pf_name, description, g_json),
+                (gid, growth_portfolio_id, user_id, sname_g, g_pf_name, description, g_snap),
             )
         if owns_retirement:
             conn.execute(
@@ -1155,7 +1228,7 @@ def save_life_scenario_bundle(
                 (scenario_id, portfolio_id, user_id, scenario_name, portfolio_name, description, intake_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (rid, retirement_portfolio_id, user_id, sname_r, r_pf_name, description, r_json),
+                (rid, retirement_portfolio_id, user_id, sname_r, r_pf_name, description, r_snap),
             )
         lid = str(uuid.uuid4())
         conn.execute(
@@ -1163,8 +1236,9 @@ def save_life_scenario_bundle(
             INSERT INTO life_scenarios
             (life_scenario_id, user_id, name, growth_scenario_id, retirement_scenario_id,
              frozen_growth_median_at_retirement_usd, retirement_success_percent,
-             life_owns_growth_scenario, life_owns_retirement_scenario)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             life_owns_growth_scenario, life_owns_retirement_scenario,
+             growth_planner_intake_json, retirement_planner_intake_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 lid,
@@ -1176,6 +1250,8 @@ def save_life_scenario_bundle(
                 retire_pct,
                 1 if owns_growth else 0,
                 1 if owns_retirement else 0,
+                planner_g_json,
+                planner_r_json,
             ),
         )
 
@@ -1189,6 +1265,47 @@ def save_life_scenario_bundle(
         "frozen_growth_median_at_retirement_usd": frozen_usd,
         "retirement_success_percent": retire_pct,
     }
+
+
+def update_life_scenario_planner_intakes(
+    life_scenario_id: str,
+    user_id: str,
+    growth_intake: Dict[str, Any],
+    retirement_intake: Dict[str, Any],
+    name: Optional[str] = None,
+) -> bool:
+    """Persist life-planner-only intakes without modifying linked saved_scenarios or portfolios."""
+    init_db()
+    with get_db() as conn:
+        chk = conn.execute(
+            "SELECT 1 FROM life_scenarios WHERE life_scenario_id = ? AND user_id = ?",
+            (life_scenario_id, user_id),
+        ).fetchone()
+    if not chk:
+        return False
+    gij = json.dumps(growth_intake)
+    rij = json.dumps(retirement_intake)
+    nm = (name or "").strip()
+    with get_db() as conn:
+        if nm:
+            cur = conn.execute(
+                """
+                UPDATE life_scenarios
+                SET growth_planner_intake_json = ?, retirement_planner_intake_json = ?, name = ?
+                WHERE life_scenario_id = ? AND user_id = ?
+                """,
+                (gij, rij, nm, life_scenario_id, user_id),
+            )
+        else:
+            cur = conn.execute(
+                """
+                UPDATE life_scenarios
+                SET growth_planner_intake_json = ?, retirement_planner_intake_json = ?
+                WHERE life_scenario_id = ? AND user_id = ?
+                """,
+                (gij, rij, life_scenario_id, user_id),
+            )
+    return cur.rowcount > 0
 
 
 def update_life_scenario_frozen_growth_median(
@@ -1270,9 +1387,7 @@ def get_life_scenario_for_user(life_scenario_id: str, user_id: str) -> Optional[
     with get_db() as conn:
         row = conn.execute(
             """
-            SELECT life_scenario_id, user_id, name, growth_scenario_id, retirement_scenario_id,
-                   frozen_growth_median_at_retirement_usd, retirement_success_percent, created_at,
-                   life_owns_growth_scenario, life_owns_retirement_scenario
+            SELECT *
             FROM life_scenarios
             WHERE life_scenario_id = ? AND user_id = ?
             """,
@@ -1281,6 +1396,18 @@ def get_life_scenario_for_user(life_scenario_id: str, user_id: str) -> Optional[
     if not row:
         return None
     meta = dict(row)
+    for raw_k, out_k in (
+        ("growth_planner_intake_json", "growth_planner_intake"),
+        ("retirement_planner_intake_json", "retirement_planner_intake"),
+    ):
+        raw = meta.pop(raw_k, None)
+        if raw:
+            try:
+                meta[out_k] = json.loads(raw)
+            except Exception:
+                meta[out_k] = None
+        else:
+            meta[out_k] = None
     if "life_owns_growth_scenario" not in meta or meta["life_owns_growth_scenario"] is None:
         meta["life_owns_growth_scenario"] = 1
     if "life_owns_retirement_scenario" not in meta or meta["life_owns_retirement_scenario"] is None:
@@ -1289,6 +1416,16 @@ def get_life_scenario_for_user(life_scenario_id: str, user_id: str) -> Optional[
     r = get_scenario(meta["retirement_scenario_id"])
     if not g or not r or g.get("user_id") != user_id or r.get("user_id") != user_id:
         return None
+    gp = get_portfolio(g.get("portfolio_id") or "")
+    rp = get_portfolio(r.get("portfolio_id") or "")
+    if gp and gp.get("user_id") == user_id:
+        pn = (gp.get("portfolio_name") or "").strip()
+        if pn:
+            g = {**g, "portfolio_name": pn}
+    if rp and rp.get("user_id") == user_id:
+        pn = (rp.get("portfolio_name") or "").strip()
+        if pn:
+            r = {**r, "portfolio_name": pn}
     return {**meta, "growth": g, "retirement": r}
 
 
