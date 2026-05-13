@@ -92,6 +92,7 @@ from backend.alphavantage_sector_bridge import (  # noqa: E402
     seed_ticker_classification_cache_from_alphavantage,
 )
 from backend.unused_codes.agentic import LLMClient  # noqa: E402
+from backend.db_connection import close_db_pool  # noqa: E402
 from backend.db import (  # noqa: E402
     append_net_worth_value_history_snapshot,
     build_net_worth_chart_series,
@@ -483,6 +484,12 @@ def create_portfolio(payload: PortfolioRequest) -> Dict[str, object]:
 def _init_saved_portfolios_db() -> None:
     """Initialize saved_portfolios table on startup."""
     init_db()
+
+
+@app.on_event("shutdown")
+def _close_postgres_pool() -> None:
+    """Release Supabase / Postgres pool handles on process exit."""
+    close_db_pool()
 
 
 @app.post("/api/auth/register")

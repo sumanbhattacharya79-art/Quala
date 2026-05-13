@@ -4,22 +4,22 @@
       "label": "growth",
       "portfolio": {
         "VTI": 0.45,
-        "VXUS": 0.25,
-        "QQQ": 0.15,
-        "BND": 0.15
+        "VXUS": 0.3,
+        "BND": 0.2,
+        "GLD": 0.05
       },
       "ticker_mapping": {
-        "BND": "VBMFX",
-        "QQQ": "QQQ",
         "VTI": "VTI",
+        "GLD": "GLD",
+        "BND": "VBMFX",
         "VXUS": "EFA"
       }
     }
   ],
   "ticker_mapping": {
-    "BND": "VBMFX",
-    "QQQ": "QQQ",
     "VTI": "VTI",
+    "GLD": "GLD",
+    "BND": "VBMFX",
     "VXUS": "EFA"
   }
 }

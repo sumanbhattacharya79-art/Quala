@@ -1,5 +1,5 @@
 """
-SQLite + sqlite-vec backend for storing saved portfolios and users.
+SQLite + sqlite-vec backend, or Postgres (Supabase) when DATABASE_URL is set.
 """
 from __future__ import annotations
 
@@ -10,15 +10,17 @@ import re
 import secrets
 import uuid
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 try:
     import pysqlite3.dbapi2 as sqlite3  # type: ignore  # enables extension loading for sqlite-vec
 except ImportError:
     import sqlite3
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+
+from backend.db_connection import PgConnectionAdapter, close_db_pool, get_pool, use_postgres
 
 _log = logging.getLogger(__name__)
 
@@ -58,7 +60,12 @@ def _get_connection() -> sqlite3.Connection:
 
 @contextmanager
 def get_db():
-    """Context manager for database connections."""
+    """Context manager for database connections (SQLite file or Supabase Postgres pool)."""
+    if use_postgres():
+        pool = get_pool()
+        with pool.connection() as conn:
+            yield PgConnectionAdapter(conn)
+        return
     conn = _get_connection()
     try:
         yield conn
@@ -70,7 +77,7 @@ def get_db():
         conn.close()
 
 
-def _ensure_columns(conn: sqlite3.Connection) -> None:
+def _ensure_columns(conn: Any) -> None:
     """Add portfolio_name and portfolio_value if missing (migration)."""
     try:
         conn.execute("ALTER TABLE saved_portfolios ADD COLUMN portfolio_name TEXT NOT NULL DEFAULT 'My Portfolio'")
@@ -178,7 +185,12 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
-    """Create tables if they do not exist."""
+    """Create tables if they do not exist (SQLite). With DATABASE_URL, schema is managed separately; only ping DB."""
+    if use_postgres():
+        pool = get_pool()
+        with pool.connection() as c:
+            c.execute("SELECT 1")
+        return
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS user (
@@ -467,7 +479,7 @@ def portfolio_name_exists_for_user(
     return row is not None
 
 
-def _intake_dict_from_row_column(row: sqlite3.Row, col: str = "intake_json") -> Optional[Dict[str, Any]]:
+def _intake_dict_from_row_column(row: Union[sqlite3.Row, Mapping[str, Any]], col: str = "intake_json") -> Optional[Dict[str, Any]]:
     if col not in row.keys():
         return None
     raw = row[col]
@@ -1780,7 +1792,7 @@ def _unlink_portfolio_from_user_net_worth(user_id: str, portfolio_id: str) -> No
     upsert_user_net_worth_links(user_id, new_linked)
 
 
-def _legacy_user_net_worth_row(user_id: str) -> Optional[sqlite3.Row]:
+def _legacy_user_net_worth_row(user_id: str) -> Optional[Any]:
     init_db()
     with get_db() as conn:
         return conn.execute(
@@ -1863,7 +1875,7 @@ def get_user_net_worth_linked_portfolio_ids(user_id: str) -> List[str]:
             """,
             (user_id,),
         ).fetchall()
-        from_entries = [str(r[0]) for r in erows if r[0]]
+        from_entries = [str(r["portfolio_id"]) for r in erows if r.get("portfolio_id")]
         row = conn.execute(
             "SELECT data_json FROM user_net_worth WHERE user_id = ?",
             (user_id,),
@@ -1900,7 +1912,7 @@ def upsert_user_net_worth_links(user_id: str, linked_portfolio_ids: List[str]) -
 
 
 def _insert_net_worth_value_history_row(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: str,
     kind: str,
     name: str,
