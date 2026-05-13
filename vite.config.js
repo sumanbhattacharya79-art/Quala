@@ -5,10 +5,13 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Vercel serves the SPA at the site root; FastAPI serves the same build under /static.
+const base = process.env.VERCEL ? "/" : "/static/";
+
 export default defineConfig({
   plugins: [react()],
   root: path.join(__dirname, "app/frontend"),
-  base: "/static/",
+  base,
   build: {
     outDir: path.join(__dirname, "app/frontend/dist"),
     emptyOutDir: true,
