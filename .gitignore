@@ -1,3 +1,6 @@
 *.api
 *.txt
 .env
+
+# Vite production output when building with VERCEL=1 (repo root)
+/dist
