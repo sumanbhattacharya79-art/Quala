@@ -1,5 +1,7 @@
 *.api
 *.txt
+!requirements.txt
+!requirements-docker.txt
 .env
 
 # Vite production output when building with VERCEL=1 (repo root)
