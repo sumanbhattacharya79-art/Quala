@@ -1,5 +1,17 @@
+/** Production (e.g. Vercel): set `VITE_API_BASE_URL` to your FastAPI origin, no trailing slash. Local dev: leave unset so Vite proxies `/api`. */
+export function resolveApiUrl(url) {
+  if (typeof url !== "string") return url;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  const base = String(import.meta.env.VITE_API_BASE_URL ?? "")
+    .trim()
+    .replace(/\/$/, "");
+  if (!base) return url;
+  const path = url.startsWith("/") ? url : `/${url}`;
+  return `${base}${path}`;
+}
+
 export async function getJson(url) {
-  const res = await fetch(url);
+  const res = await fetch(resolveApiUrl(url));
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
     const msg = typeof detail.detail === "string" ? detail.detail : "Request failed";
@@ -9,7 +21,7 @@ export async function getJson(url) {
 }
 
 export async function postJson(url, payload) {
-  const res = await fetch(url, {
+  const res = await fetch(resolveApiUrl(url), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -28,7 +40,7 @@ export async function postJson(url, payload) {
 }
 
 export async function putJson(url, payload) {
-  const res = await fetch(url, {
+  const res = await fetch(resolveApiUrl(url), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -47,7 +59,7 @@ export async function putJson(url, payload) {
 }
 
 export async function deleteJson(url) {
-  const res = await fetch(url, { method: "DELETE" });
+  const res = await fetch(resolveApiUrl(url), { method: "DELETE" });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
     const msg = typeof detail.detail === "string" ? detail.detail : "Request failed";

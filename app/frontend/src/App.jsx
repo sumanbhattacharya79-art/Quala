@@ -5,6 +5,7 @@ import {
   putJson,
   getJson,
   deleteJson,
+  resolveApiUrl,
   SESSION_KEY,
   USER_ID_KEY,
   USER_EMAIL_KEY,
@@ -6684,7 +6685,7 @@ function AnalyzeForm({
         list.map(async (file) => {
           const form = new FormData();
           form.append("file", file);
-          const res = await fetch("/api/analyze-portfolio/parse", { method: "POST", body: form });
+          const res = await fetch(resolveApiUrl("/api/analyze-portfolio/parse"), { method: "POST", body: form });
           if (!res.ok) {
             const body = await res.json().catch(() => ({}));
             throw new Error(`${file.name}: ${parseErrMsg(body)}`);
