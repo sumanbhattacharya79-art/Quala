@@ -1252,6 +1252,11 @@ export default function App() {
   const [sbsRightLoading, setSbsRightLoading] = useState(false);
   const [sbsNotice, setSbsNotice] = useState(null);
   const bottomRef = useRef(null);
+  const refineChatTextareaRef = useRef(null);
+  /** Text box for portfolio refinement (Quala / Panda) after user chooses Keep Refining. */
+  const [refineChatOpen, setRefineChatOpen] = useState(false);
+  const [refineChatInput, setRefineChatInput] = useState("");
+  const [refineChatAdvisor, setRefineChatAdvisor] = useState("Quala");
   /** Monotonic ids so rapid addMessage calls (e.g. quala_handoff + Ana) never share Date.now() and collide on key={msg.id}. */
   const nextMessageIdRef = useRef(2);
   /** After Emu retirement backtest, user chose "Keep refining" — next /money-manager call forces Panda (three portfolios). */
@@ -1355,7 +1360,13 @@ export default function App() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isTyping, choiceButtons]);
+  }, [messages, isTyping, choiceButtons, refineChatOpen]);
+
+  useEffect(() => {
+    if (!refineChatOpen) return;
+    const t = setTimeout(() => refineChatTextareaRef.current?.focus(), 80);
+    return () => clearTimeout(t);
+  }, [refineChatOpen]);
 
   useEffect(() => {
     setPortfolioWhatIfMode(false);
@@ -1395,6 +1406,8 @@ export default function App() {
         setMessages(INITIAL_MESSAGES);
         setView(userId ? "loggedInOptions" : "intake");
         setChoiceButtons(null);
+        setRefineChatOpen(false);
+        setRefineChatInput("");
         setAwaitingPortfolios(false);
         setSelectedPortfolioId(null);
         setSelectedPortfolioRow(null);
@@ -1674,10 +1687,32 @@ export default function App() {
     fetchNetWorthSidebar(uid);
   };
 
+  const openRefineChat = (advisor) => {
+    setRefineChatAdvisor(advisor === "Panda" ? "Panda" : "Quala");
+    setRefineChatInput("");
+    setRefineChatOpen(true);
+    setView("chat");
+  };
+
+  const handleRefineChatSend = async () => {
+    const text = refineChatInput.trim();
+    if (!text || isTyping) return;
+    setRefineChatInput("");
+    await sendQuickMessage(text);
+  };
+
+  const handleRefineChatKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleRefineChatSend();
+    }
+  };
+
   const handleActions = (actions, responseAgent) => {
     if (!actions?.length) return;
     for (const action of actions) {
       if (action.type === "show_portfolio_choices") {
+        setRefineChatOpen(false);
         setAwaitingPortfolios(false);
         const refineAdvisor = action.refine_advisor || "Quala";
         const refinePromptGrowth =
@@ -1694,17 +1729,18 @@ export default function App() {
           onPick: (value) => {
             if (value === "__keep_refining_portfolio__") {
               setChoiceButtons(null);
-              setView("chat");
               setAwaitingPortfolios(false);
               const prompt =
                 refineAdvisor === "Panda" ? refinePromptRetirement : refinePromptGrowth;
               addMessage("assistant", prompt, null, refineAdvisor);
+              openRefineChat(refineAdvisor);
             } else {
               sendQuickMessage(value);
             }
           },
         });
       } else if (action.type === "show_post_backtest_choices") {
+        setRefineChatOpen(false);
         const refineAdvisor = action.refine_advisor || "Quala";
         const refinePromptGrowth =
           "How would you like to refine? Examples: add QQQ=30%, add GLD, shift toward more bonds.";
@@ -1735,7 +1771,7 @@ export default function App() {
               const prompt =
                 refineAdvisor === "Panda" ? refinePromptRetirement : refinePromptGrowth;
               addMessage("assistant", prompt, null, refineAdvisor);
-              setView("chat");
+              openRefineChat(refineAdvisor);
             }
           },
         });
@@ -3997,6 +4033,60 @@ export default function App() {
         .choice-btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
         .choice-btn:hover { border-color: #c8a96e40; color: #c8a96e; background: #c8a96e08; }
         .choice-btn.selected { border-color: #c8a96e; color: #c8a96e; background: #c8a96e15; }
+        .refine-input-bar {
+          padding: 14px 28px 20px;
+          flex-shrink: 0;
+          border-top: 1px solid var(--border-top);
+          background: var(--app-bg);
+        }
+        .refine-input-inner {
+          display: flex;
+          align-items: flex-end;
+          gap: 10px;
+          background: var(--surface-input);
+          border: 1px solid var(--border);
+          border-radius: 5px;
+          padding: 12px 14px;
+          transition: border-color 0.2s;
+        }
+        .refine-input-inner:focus-within { border-color: #c8a96e40; }
+        .refine-chat-textarea {
+          flex: 1;
+          background: none;
+          border: none;
+          outline: none;
+          font-family: 'DM Mono', monospace;
+          font-size: 13px;
+          color: var(--text);
+          resize: none;
+          line-height: 1.6;
+          max-height: 120px;
+          overflow-y: auto;
+        }
+        .refine-chat-textarea::placeholder { color: var(--placeholder); }
+        .refine-send-btn {
+          background: #c8a96e;
+          border: none;
+          border-radius: 3px;
+          width: 34px;
+          height: 34px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          flex-shrink: 0;
+          transition: all 0.2s;
+          color: var(--on-accent);
+        }
+        .refine-send-btn:hover:not(:disabled) { background: #d4b87e; transform: scale(1.03); }
+        .refine-send-btn:disabled { opacity: 0.35; cursor: default; transform: none; }
+        .refine-input-hint {
+          font-size: 9px;
+          color: var(--msg-time);
+          text-align: right;
+          margin-top: 7px;
+          letter-spacing: 0.05em;
+        }
         .retirement-status-row {
           display: flex;
           flex-wrap: wrap;
@@ -4236,6 +4326,16 @@ export default function App() {
         [data-theme="light"] .form-panel input::placeholder,
         [data-theme="light"] .form-panel textarea::placeholder,
         [data-theme="light"] .intake-inline-input::placeholder {
+          color: #78716c !important;
+        }
+        [data-theme="light"] .refine-input-inner {
+          background: #ffffff !important;
+          border-color: #c4bdb0 !important;
+        }
+        [data-theme="light"] .refine-chat-textarea {
+          color: #1c1917 !important;
+        }
+        [data-theme="light"] .refine-chat-textarea::placeholder {
           color: #78716c !important;
         }
         [data-theme="light"] .choice-btn,
@@ -6215,6 +6315,45 @@ export default function App() {
             </div>
           )}
           </div>
+          )}
+
+          {refineChatOpen && view === "chat" && !choiceButtons && (
+            <div className="refine-input-bar" role="region" aria-label="Refine portfolio">
+              <div className="refine-input-inner">
+                <textarea
+                  ref={refineChatTextareaRef}
+                  className="refine-chat-textarea"
+                  placeholder={
+                    refineChatAdvisor === "Panda"
+                      ? "Describe how to refine your retirement portfolios (e.g. add JEPI=15%, more bonds)…"
+                      : "Describe how to refine your growth portfolios (e.g. add QQQ=30%, add GLD)…"
+                  }
+                  value={refineChatInput}
+                  onChange={(e) => {
+                    setRefineChatInput(e.target.value);
+                    e.target.style.height = "auto";
+                    e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+                  }}
+                  onKeyDown={handleRefineChatKey}
+                  rows={1}
+                  disabled={isTyping}
+                />
+                <button
+                  type="button"
+                  className="refine-send-btn"
+                  onClick={handleRefineChatSend}
+                  disabled={!refineChatInput.trim() || isTyping}
+                  title="Send (Enter)"
+                  aria-label="Send refinement"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <line x1="22" y1="2" x2="11" y2="13" />
+                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                  </svg>
+                </button>
+              </div>
+              <div className="refine-input-hint">ENTER to send · SHIFT+ENTER for new line</div>
+            </div>
           )}
 
           <LegalStickyFooter />
