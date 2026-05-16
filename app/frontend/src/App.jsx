@@ -1438,7 +1438,10 @@ export default function App() {
         activePortfolioFlowRef.current = flow;
       }
       const pf = flow || activePortfolioFlowRef.current;
-      if (pf) payload.portfolio_flow = pf;
+      // Pick messages must not re-send portfolio_flow (backend would reset to retirement_planning).
+      if (pf && !isPortfolioChoiceMessage(payload.message)) {
+        payload.portfolio_flow = pf;
+      }
       portfolioFlowEpochRef.current += 1;
       payload.flow_epoch = portfolioFlowEpochRef.current;
       appendMoneyManagerUserId(payload, userId);

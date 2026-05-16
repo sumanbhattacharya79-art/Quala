@@ -2513,6 +2513,18 @@ def _apply_portfolio_flow_choice(
         return False
     session.portfolio_flow = flow
     if flow == "retirement":
+        # Do not reset when user is picking 1/2/3 (frontend may resend portfolio_flow=retirement).
+        if current_phase in (
+            "retirement_choosing",
+            "retirement_refining",
+            "analyst_running",
+            "post_analysis",
+        ):
+            logger.info(
+                "portfolio_flow=retirement kept phase=%s (no reset to retirement_planning)",
+                current_phase,
+            )
+            return False
         session.phase = "retirement_planning"
         session.parsed_portfolios = None
         logger.info(
@@ -3208,13 +3220,19 @@ def run_message(
     # picked one. Any non-choice message = refinement (no need to explicitly say "refine" or click refine).
 
     resolved_flow = _resolve_portfolio_flow(portfolio_flow, message)
-    flow_explicit = resolved_flow in ("growth", "retirement")
-    _apply_portfolio_flow_choice(session, resolved_flow, current_phase)
-    _sync_phase_to_portfolio_flow(session)
+    # Pick 1/2/3 before portfolio_flow button logic — resending portfolio_flow=retirement
+    # must not wipe parsed_portfolios or skip Emu handoff.
+    portfolio_pick_applied = _try_apply_portfolio_pick(session, message, current_phase)
 
-    portfolio_pick_applied = False
-    if not flow_explicit:
-        portfolio_pick_applied = _try_apply_portfolio_pick(session, message, current_phase)
+    if portfolio_pick_applied:
+        flow_explicit = False
+        if resolved_flow in ("growth", "retirement"):
+            session.portfolio_flow = resolved_flow
+    else:
+        flow_explicit = resolved_flow in ("growth", "retirement")
+        if flow_explicit:
+            _apply_portfolio_flow_choice(session, resolved_flow, current_phase)
+        _sync_phase_to_portfolio_flow(session)
 
     if not portfolio_pick_applied and not flow_explicit and current_phase in (
         "portfolio_building",
