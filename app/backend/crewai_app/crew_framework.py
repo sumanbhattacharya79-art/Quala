@@ -1739,6 +1739,11 @@ _PANDA_BASE_DESCRIPTION = (
     "Put ALL portfolio details "
     "(tickers, weights, **asset class** under JSON key \"sectors\", **sectors** under JSON key \"industries\", estimates) "
     "ONLY in the JSON block — do NOT list in chat. "
+    "Put ALL estimates (TWR/cagr_range, Beta, max drawdown, **2008 crash impact**, **2022 crash impact**, "
+    "yield, projected income at retirement) ONLY in each portfolio's JSON \"estimates\" object — do NOT list them in chat. "
+    "For crash_2008 and crash_2022 you MUST give an estimated **portfolio loss range** plus one short reason "
+    "(e.g. \"Estimated loss of 10% - 16%. Bond and dividend sleeves buffer equity.\"). "
+    "NEVER use \"...\", \"TBD\", or empty placeholders.\n\n"
     "The chosen portfolio's **tickers**, **asset class** (\"sectors\": US Stocks, International Stocks, "
     "Bonds, Commodities, Digital Assets, Other), and **sectors** (\"industries\": Technology, Financials, … per Quala) "
     "are passed to Emu as JSON for bar charts — keep them accurate and summing to 1.0. "
@@ -1782,7 +1787,8 @@ _PANDA_REFINING_ADDENDUM = (
     "2. Rebuild the 3 retirement portfolios with the refinement applied.\n"
     "3. Output the results in the SAME format as before: brief 2–4 sentence summary per portfolio "
     "in chat, then the full JSON block with <<<PORTFOLIOS_JSON>>> and <<<END_PORTFOLIOS_JSON>>> "
-    "containing all 3 portfolios with tickers, asset class (\"sectors\"), sectors (\"industries\"), and estimates. "
+    "containing all 3 portfolios with tickers, asset class (\"sectors\"), sectors (\"industries\"), and estimates "
+    "(including crash_2008 and crash_2022 with real loss ranges — never \"...\"). "
     "Do NOT mention medical cost when presenting portfolios.\n\n"
     "When the user asks ONLY finance Q&A with NO allocation change: answer helpfully; re-output the same "
     "<<<PORTFOLIOS_JSON>>> as in Structured portfolios below unchanged. When they mix Q&A and a change: "
@@ -1800,22 +1806,38 @@ _PANDA_OUTPUT_FORMAT = (
     "The JSON key \"industries\" must contain ONLY sector weights: Technology, Financials, Communication Services, Consumer Discretionary, "
     "Consumer Staples, Health Care, Industrials, Energy, Utilities, Materials, Real Estate, Other. "
     "Each of conservative, moderate, aggressive MUST include tickers, asset class (\"sectors\"), sectors (\"industries\"), "
-    "and a full \"estimates\" object (cagr_range, beta_range, max_drawdown_range, crash_2008, "
-    "crash_2022, plus yield or yield_range and projected_income_at_retirement for retirement).\n"
+    "and a full \"estimates\" object: cagr_range, beta_range, max_drawdown_range, crash_2008, crash_2022 "
+    "(each crash field = estimated loss range + brief reason), yield or yield_range, "
+    "projected_income_at_retirement. Conservative = lowest risk/yield; Aggressive = highest.\n"
+    "Example (retirement; copy the crash_2008/crash_2022 style — do NOT use \"...\"):\n"
     "<<<PORTFOLIOS_JSON>>>\n"
-    "{\"conservative\": {\"tickers\": {\"BND\": 0.5, \"VTI\": 0.3, \"VYM\": 0.2}, "
-    "\"sectors\": {...}, \"industries\": {...}, \"estimates\": {\"cagr_range\": \"4%% - 6%%\", "
-    "\"beta_range\": \"0.5 - 0.7\", \"max_drawdown_range\": \"10%% - 16%%\", "
-    "\"crash_2008\": \"...\", \"crash_2022\": \"...\", \"yield\": \"2.5%%\", "
-    "\"projected_income_at_retirement\": \"$3,200/month\"}}, "
-    "\"moderate\": {\"tickers\": {...}, \"sectors\": {...}, \"industries\": {...}, "
-    "\"estimates\": {\"cagr_range\": \"5.5%% - 7.5%%\", \"beta_range\": \"0.75 - 0.95\", "
-    "\"max_drawdown_range\": \"15%% - 22%%\", \"crash_2008\": \"...\", \"crash_2022\": \"...\", "
-    "\"yield\": \"3.5%%\", \"projected_income_at_retirement\": \"$3,900/month\"}}, "
-    "\"aggressive\": {\"tickers\": {...}, \"sectors\": {...}, \"industries\": {...}, "
-    "\"estimates\": {\"cagr_range\": \"7%% - 9.5%%\", \"beta_range\": \"0.95 - 1.15\", "
-    "\"max_drawdown_range\": \"22%% - 32%%\", \"crash_2008\": \"...\", \"crash_2022\": \"...\", "
-    "\"yield\": \"4.5%%\", \"projected_income_at_retirement\": \"$4,600/month\"}}}\n"
+    "{{\"conservative\": {{\"tickers\": {{\"BND\": 0.45, \"SCHD\": 0.25, \"VNQ\": 0.15, \"VTI\": 0.15}}, "
+    "\"sectors\": {{\"Bonds\": 0.45, \"US Stocks\": 0.4, \"Real Estate\": 0.15}}, "
+    "\"industries\": {{\"Other\": 0.55, \"Financials\": 0.08, \"Real Estate\": 0.12, \"Utilities\": 0.1, "
+    "\"Consumer Staples\": 0.08, \"Health Care\": 0.07}}, "
+    "\"estimates\": {{\"cagr_range\": \"4%% - 6%%\", \"beta_range\": \"0.45 - 0.65\", "
+    "\"max_drawdown_range\": \"10%% - 16%%\", "
+    "\"crash_2008\": \"Estimated loss of 8%% - 14%%. Heavy bonds and dividend ETFs buffer equity drawdowns.\", "
+    "\"crash_2022\": \"Estimated loss of 6%% - 12%%. Bonds and REITs fell with rates; equity sleeve smaller.\", "
+    "\"yield\": \"2.8%%\", \"projected_income_at_retirement\": \"$3,200/month\"}}}}, "
+    "\"moderate\": {{\"tickers\": {{\"BND\": 0.25, \"SCHD\": 0.25, \"VTI\": 0.25, \"VXUS\": 0.15, \"VNQ\": 0.1}}, "
+    "\"sectors\": {{\"US Stocks\": 0.5, \"Bonds\": 0.25, \"International Stocks\": 0.15, \"Real Estate\": 0.1}}, "
+    "\"industries\": {{\"Technology\": 0.12, \"Financials\": 0.1, \"Health Care\": 0.08, \"Other\": 0.45, "
+    "\"Real Estate\": 0.08, \"Consumer Staples\": 0.07, \"Industrials\": 0.06}}, "
+    "\"estimates\": {{\"cagr_range\": \"5.5%% - 7.5%%\", \"beta_range\": \"0.7 - 0.9\", "
+    "\"max_drawdown_range\": \"15%% - 22%%\", "
+    "\"crash_2008\": \"Estimated loss of 14%% - 20%%. Balanced equity and income; bonds helped versus pure equity.\", "
+    "\"crash_2022\": \"Estimated loss of 12%% - 18%%. Rate shock hit bonds and dividend stocks together.\", "
+    "\"yield\": \"3.4%%\", \"projected_income_at_retirement\": \"$3,900/month\"}}}}, "
+    "\"aggressive\": {{\"tickers\": {{\"SCHD\": 0.25, \"JEPI\": 0.2, \"VTI\": 0.25, \"QQQ\": 0.15, \"VNQ\": 0.15}}, "
+    "\"sectors\": {{\"US Stocks\": 0.65, \"Real Estate\": 0.15, \"Bonds\": 0.1, \"International Stocks\": 0.1}}, "
+    "\"industries\": {{\"Technology\": 0.22, \"Financials\": 0.1, \"Real Estate\": 0.1, \"Other\": 0.35, "
+    "\"Health Care\": 0.08, \"Consumer Discretionary\": 0.08}}, "
+    "\"estimates\": {{\"cagr_range\": \"7%% - 9.5%%\", \"beta_range\": \"0.95 - 1.15\", "
+    "\"max_drawdown_range\": \"22%% - 32%%\", "
+    "\"crash_2008\": \"Estimated loss of 28%% - 38%%. Higher equity and income ETF tilt; less bond buffer.\", "
+    "\"crash_2022\": \"Estimated loss of 20%% - 28%%. Growth and covered-call sleeves sensitive to rate hikes.\", "
+    "\"yield\": \"4.6%%\", \"projected_income_at_retirement\": \"$4,600/month\"}}}}}}\n"
     "<<<END_PORTFOLIOS_JSON>>>\n\n"
     "Output ONLY your direct reply to the user. Do NOT output Thought:, Action:, or internal monologue."
 )
@@ -2732,6 +2754,64 @@ def _strip_agent_thought(text: str) -> str:
     return out if out else ""
 
 
+_ESTIMATE_PLACEHOLDER_RE = re.compile(
+    r"^\.{1,6}$|^…$|^tbd$|^n/a$|^na$|^-$|^pending$|^unknown$",
+    re.IGNORECASE,
+)
+
+# Fallback when Panda/Quala copy "..." from an old prompt template
+_CRASH_ESTIMATE_DEFAULTS: Dict[str, Dict[str, str]] = {
+    "conservative": {
+        "crash_2008": (
+            "Estimated loss of 8% - 14%. Bond-heavy income mix typically fared better than pure equity in 2008."
+        ),
+        "crash_2022": (
+            "Estimated loss of 6% - 12%. Bonds and REITs declined with rising rates; smaller equity sleeve."
+        ),
+    },
+    "moderate": {
+        "crash_2008": (
+            "Estimated loss of 14% - 20%. Mixed bonds and dividend equities; partial buffer versus equities alone."
+        ),
+        "crash_2022": (
+            "Estimated loss of 12% - 18%. Rate-driven selloff in bonds and income equities together."
+        ),
+    },
+    "aggressive": {
+        "crash_2008": (
+            "Estimated loss of 28% - 38%. Higher equity and yield tilt; limited bond buffer in 2008."
+        ),
+        "crash_2022": (
+            "Estimated loss of 20% - 28%. Growth and high-yield sleeves sensitive to rate hikes in 2022."
+        ),
+    },
+}
+
+
+def _sanitize_estimate_placeholders(portfolios: Optional[Dict[str, dict]]) -> None:
+    """Replace literal '...' crash placeholders with tier-appropriate LLM-style estimates."""
+    if not portfolios:
+        return
+    for name, p in portfolios.items():
+        if not isinstance(p, dict):
+            continue
+        est = p.get("estimates")
+        if not isinstance(est, dict):
+            continue
+        defaults = _CRASH_ESTIMATE_DEFAULTS.get(
+            name.lower(), _CRASH_ESTIMATE_DEFAULTS["moderate"]
+        )
+        for key in ("crash_2008", "crash_2022"):
+            raw = est.get(key)
+            if raw is None or _ESTIMATE_PLACEHOLDER_RE.match(str(raw).strip()):
+                est[key] = defaults[key]
+                logger.warning(
+                    "Replaced placeholder estimates.%s for portfolio %s",
+                    key,
+                    name,
+                )
+
+
 def _parse_portfolios_json(text: str) -> Optional[Dict[str, dict]]:
     """Extract the structured portfolios JSON from Quala's response.
 
@@ -3571,6 +3651,7 @@ def run_message(
     if responding_agent in ("Quala", "Panda"):
         parsed = _parse_portfolios_json(output_str)
         if parsed:
+            _sanitize_estimate_placeholders(parsed)
             session.parsed_portfolios = parsed
             artifacts["all_portfolios"] = parsed
             date_range = os.getenv("LLM_ESTIMATES_DATE_RANGE")
