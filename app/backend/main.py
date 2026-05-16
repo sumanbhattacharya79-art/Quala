@@ -148,6 +148,10 @@ class IntakeRequest(BaseModel):
     session_id: Optional[str] = None
     message: str = Field(..., min_length=1)
     intake: Optional[Dict[str, object]] = None  # optional form values for backtest context
+    # UI choice: "growth" -> Quala, "retirement" -> Panda (welcome / logged-in option buttons)
+    portfolio_flow: Optional[str] = None
+    # Monotonic counter from UI; ignores stale in-flight requests after user switches flow
+    flow_epoch: Optional[int] = None
     # Next chat turn after retirement post-backtest "Keep refining" — route to Panda for 3 portfolios
     retirement_refinement_after_emu: bool = False
     user_id: Optional[str] = None  # when logged in: attribute Gemini token usage to this user
@@ -448,13 +452,27 @@ def chat_money_manager(payload: IntakeRequest) -> ChatResponse:
         set_intake_context(session_id, intake)
         _log.info("chat_money_manager: synced intake from request initial_value=%s monthly_savings=%s horizon=%s", intake.initial_value, intake.monthly_savings, intake.horizon_years)
     try:
+        flow = (payload.portfolio_flow or "").strip().lower()
+        if flow not in ("growth", "retirement"):
+            flow = None
         result = run_message(
             session_id,
             payload.message,
             intake_payload=payload.intake,
+            portfolio_flow=flow,
+            flow_epoch=payload.flow_epoch,
             retirement_refinement_after_emu=bool(payload.retirement_refinement_after_emu),
             user_id=(payload.user_id or "").strip() or None,
         )
+        if result.get("stale"):
+            return ChatResponse(
+                session_id=session_id,
+                intent="money_manager",
+                reply="",
+                actions=[],
+                artifacts={},
+                agent=None,
+            )
     except Exception as exc:
         import traceback
         traceback.print_exc()
@@ -479,7 +497,8 @@ def chat_money_manager(payload: IntakeRequest) -> ChatResponse:
     if crew_session.phase in _phases_portfolio_pick:
         refine_advisor = (
             "Panda"
-            if crew_session.phase
+            if (getattr(crew_session, "portfolio_flow", None) or "").lower() == "retirement"
+            or crew_session.phase
             in ("retirement_planning", "retirement_choosing", "retirement_refining")
             else "Quala"
         )

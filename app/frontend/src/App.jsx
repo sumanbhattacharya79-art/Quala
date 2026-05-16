@@ -1165,6 +1165,10 @@ export default function App() {
   formStateRef.current = formState;
   const [currentIntent, setCurrentIntent] = useState("intake");
   const [savedIntakeMessage, setSavedIntakeMessage] = useState("");
+  /** Persists Quala vs Panda path across chat turns (growth | retirement). */
+  const activePortfolioFlowRef = useRef(null);
+  const portfolioFlowEpochRef = useRef(0);
+  const moneyManagerAbortRef = useRef(null);
   const [userFilledIntakeForm, setUserFilledIntakeForm] = useState(false);
   const [intakeFormError, setIntakeFormError] = useState(null);
   const [lastPortfolioComposition, setLastPortfolioComposition] = useState(null);
@@ -1423,7 +1427,37 @@ export default function App() {
   const isPortfolioChoiceMessage = (t) =>
     /^go with the (conservative|moderate|aggressive) portfolio$/i.test((t || "").trim());
 
+  const postMoneyManager = useCallback(
+    async (payload, flow) => {
+      if (moneyManagerAbortRef.current) {
+        moneyManagerAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      moneyManagerAbortRef.current = controller;
+      if (flow === "growth" || flow === "retirement") {
+        activePortfolioFlowRef.current = flow;
+      }
+      const pf = flow || activePortfolioFlowRef.current;
+      if (pf) payload.portfolio_flow = pf;
+      portfolioFlowEpochRef.current += 1;
+      payload.flow_epoch = portfolioFlowEpochRef.current;
+      appendMoneyManagerUserId(payload, userId);
+      try {
+        return await postJson("/api/chat/money-manager", payload, { signal: controller.signal });
+      } catch (err) {
+        if (err.name === "AbortError") return null;
+        throw err;
+      } finally {
+        if (moneyManagerAbortRef.current === controller) {
+          moneyManagerAbortRef.current = null;
+        }
+      }
+    },
+    [userId],
+  );
+
   const addChatResponse = (data) => {
+    if (!data) return;
     if (data?.artifacts?.quala_handoff) {
       addMessage("assistant", data.artifacts.quala_handoff, null, "Quala");
     }
@@ -1719,8 +1753,8 @@ export default function App() {
       const intake = getIntakeFromFormOrState();
       if (intake) payload.intake = intake;
       attachRetirementRefineAfterEmu(payload);
-      appendMoneyManagerUserId(payload, userId);
-      const data = await postJson("/api/chat/money-manager", payload);
+      const data = await postMoneyManager(payload);
+      if (!data) return;
       syncSessionFromResponse(data.session_id);
       addChatResponse(data);
     } catch (err) {
@@ -3107,10 +3141,11 @@ export default function App() {
       addMessage("assistant", "Let me build your growth portfolios. One moment...");
       setIsTyping(true);
       try {
-        const payload = { session_id: sessionId, message: msg, intake: intakePayload };
-        appendMoneyManagerUserId(payload, userId);
-        const data = await postJson("/api/chat/money-manager", payload);
-        addChatResponse(data);
+        const data = await postMoneyManager(
+          { session_id: sessionId, message: msg, intake: intakePayload },
+          "growth",
+        );
+        if (data) addChatResponse(data);
       } catch (err) {
         addMessage("error", err.message);
       } finally {
@@ -3119,15 +3154,16 @@ export default function App() {
     } else if (pendingLoggedInAction === "retirement") {
       setPendingLoggedInAction(null);
       setView("chat");
-      const retirementLine = "Yes, let's work on my retirement portfolio.";
+      const retirementLine = "Work on retirement portfolio.";
       const apiMessage = `${msg}\n\n${retirementLine}`;
       addMessage("assistant", "I am Panda and I will help you with your retirement planning. Let me build your retirement portfolios. One moment...", null, "Panda");
       setIsTyping(true);
       try {
-        const payload = { session_id: sessionId, message: apiMessage, intake: intakePayload };
-        appendMoneyManagerUserId(payload, userId);
-        const data = await postJson("/api/chat/money-manager", payload);
-        addChatResponse(data);
+        const data = await postMoneyManager(
+          { session_id: sessionId, message: apiMessage, intake: intakePayload },
+          "retirement",
+        );
+        if (data) addChatResponse(data);
       } catch (err) {
         addMessage("error", err.message);
       } finally {
@@ -3336,6 +3372,7 @@ export default function App() {
     }
 
     if (option === "growth") {
+      activePortfolioFlowRef.current = "growth";
       try {
         let intake = userId ? (getIntakeFromForm() ?? (await getJson(`/api/user/intake?user_id=${encodeURIComponent(userId)}`).catch(() => null))) : getIntakeFromFormOrState();
         let msg = savedIntakeMessage?.trim() || "";
@@ -3355,11 +3392,11 @@ export default function App() {
               `Inflation assumption: ${inflPct}%.`,
               `Risk: ${intake.risk || "medium"}.`,
               `Big spending: ${spendingNarr}.`,
-              `Initial investment amount to build growth/retirement portfolio: $${intake.initial_value || 1000}.`,
+              `Initial investment amount to build growth portfolio: $${intake.initial_value || 1000}.`,
               `Monthly savings: $${intake.monthly_savings || 0}.`,
               `Monthly expense: $${intake.current_monthly_expense || 0}.`,
               `Other notes: ${intake.other_notes || "none"}.`,
-              `I want to build a growth portfolio for retirement.`,
+              `Work on growth portfolio.`,
             ].join("\n");
             setSavedIntakeMessage(msg);
           } else {
@@ -3370,16 +3407,14 @@ export default function App() {
           setView("intake");
           return;
         }
-        if (!msg) msg = "I want to build a growth portfolio for retirement.";
+        if (!msg) msg = "Work on growth portfolio.";
         if (appendUserBubble) {
           addMessage("user", msg);
         }
         addMessage("assistant", "Let me build your growth portfolios. One moment...");
         setIsTyping(true);
-        const payload = { session_id: sessionId, message: msg, intake };
-        appendMoneyManagerUserId(payload, userId);
-        const data = await postJson("/api/chat/money-manager", payload);
-        addChatResponse(data);
+        const data = await postMoneyManager({ session_id: sessionId, message: msg, intake }, "growth");
+        if (data) addChatResponse(data);
       } catch (err) {
         setView(userId ? "loggedInOptions" : "intake");
         addMessage("error", err.message);
@@ -3390,11 +3425,15 @@ export default function App() {
     } else if (option === "retirement") {
       try {
         let intake = userId ? (getIntakeFromForm() ?? (await getJson(`/api/user/intake?user_id=${encodeURIComponent(userId)}`).catch(() => null))) : getIntakeFromFormOrState();
-        const retirementLine = "Yes, let's work on my retirement portfolio.";
+        const retirementLine = "Work on retirement portfolio.";
         let msg = savedIntakeMessage?.trim() || "";
         if (msg) {
-          msg = msg.replace(/\n*I want to build a growth portfolio for retirement\.?\s*$/i, "").trim();
+          msg = msg
+            .replace(/\n*I want to build a growth portfolio for retirement\.?\s*$/i, "")
+            .replace(/\n*Work on growth portfolio\.?\s*$/i, "")
+            .trim();
         }
+        activePortfolioFlowRef.current = "retirement";
         let appendUserBubble = true;
         if (intake) {
           if (!msg) {
@@ -3413,10 +3452,11 @@ export default function App() {
         }
         addMessage("assistant", "I am Panda and I will help you with your retirement planning. Let me build your retirement portfolios. One moment...", null, "Panda");
         setIsTyping(true);
-        const payload = { session_id: sessionId, message: apiMessage, intake };
-        appendMoneyManagerUserId(payload, userId);
-        const data = await postJson("/api/chat/money-manager", payload);
-        addChatResponse(data);
+        const data = await postMoneyManager(
+          { session_id: sessionId, message: apiMessage, intake },
+          "retirement",
+        );
+        if (data) addChatResponse(data);
       } catch (err) {
         addMessage("error", err.message);
       } finally {
@@ -3446,9 +3486,8 @@ export default function App() {
         const payload = { session_id: sessionId, message: savedIntakeMessage };
         const intake = getIntakeFromFormOrState();
         if (intake) payload.intake = intake;
-        appendMoneyManagerUserId(payload, userId);
-        const data = await postJson("/api/chat/money-manager", payload);
-        addChatResponse(data);
+        const data = await postMoneyManager(payload, "growth");
+        if (data) addChatResponse(data);
       } catch (err) {
         addMessage("error", err.message);
       } finally {

@@ -2286,6 +2286,9 @@ class ChatSession:
     session_id: str
     history: List[Dict[str, str]] = field(default_factory=list)
     last_portfolio: Optional[str] = None
+    # Set from UI portfolio_flow: "growth" (Quala) or "retirement" (Panda)
+    portfolio_flow: Optional[str] = None
+    last_flow_epoch: int = 0
     phase: str = "portfolio_building"
     chosen_portfolio: Optional[str] = None
     chosen_label: Optional[str] = None
@@ -2407,19 +2410,6 @@ _REFINE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Explicit switch to retirement (not refinement phrases like "add more yield")
-_RETIREMENT_INTENT_RE = re.compile(
-    r"\b(?:retirement\s*portfolio|work\s+on\s+(?:my\s+)?retirement|yes.*retirement|"
-    r"switch\s+to\s+retirement|retirement\s+instead|refin.*retirement|retirement.*refin)\b",
-    re.IGNORECASE,
-)
-# Explicit growth intent — do NOT switch to retirement when user says growth
-_GROWTH_INTENT_RE = re.compile(
-    r"\b(?:growth\s+portfolio|build\s+(?:a\s+)?growth|want\s+growth|growth\s+option)\b",
-    re.IGNORECASE,
-)
-
-
 def _last_assistant_agent(session: ChatSession) -> Optional[str]:
     """Return the agent who produced the most recent assistant message before the latest user turn(s)."""
     i = len(session.history) - 1
@@ -2434,6 +2424,11 @@ def _last_assistant_agent(session: ChatSession) -> Optional[str]:
 
 def _is_in_retirement_flow(session: ChatSession) -> bool:
     """True if user chose or is working on retirement portfolio."""
+    flow = (session.portfolio_flow or "").strip().lower()
+    if flow == "growth":
+        return False
+    if flow == "retirement":
+        return True
     if bool(session.chosen_retirement_composition):
         return True
     if session.phase in ("retirement_planning", "retirement_choosing", "retirement_refining"):
@@ -2463,26 +2458,79 @@ def _detect_refine(message: str) -> bool:
     return bool(_REFINE_RE.search(message))
 
 
-def _detect_retirement_intent(message: str) -> bool:
-    """Return True if the user wants to work on retirement portfolio."""
-    return bool(_RETIREMENT_INTENT_RE.search(message)) or (
-        _YES_RE.match(message.strip()) and "retirement" in message.lower()
-    )
+_WORK_ON_GROWTH_PORTFOLIO_RE = re.compile(r"\bwork\s+on\s+growth\s+portfolio\b", re.IGNORECASE)
+_WORK_ON_RETIREMENT_PORTFOLIO_RE = re.compile(
+    r"\bwork\s+on\s+(?:my\s+)?retirement\s+portfolio\b", re.IGNORECASE
+)
 
 
-def _should_switch_to_retirement_planning(message: str, session: ChatSession) -> bool:
-    """Whether to enter Panda retirement_planning from growth/post_analysis."""
-    if not _detect_retirement_intent(message):
+def _resolve_portfolio_flow(
+    portfolio_flow: Optional[str],
+    message: str,
+) -> Optional[str]:
+    """UI field wins; else explicit closing line from welcome buttons."""
+    flow = (portfolio_flow or "").strip().lower()
+    if flow in ("growth", "retirement"):
+        return flow
+    text = message or ""
+    if _WORK_ON_RETIREMENT_PORTFOLIO_RE.search(text):
+        return "retirement"
+    if _WORK_ON_GROWTH_PORTFOLIO_RE.search(text):
+        return "growth"
+    return None
+
+
+def _apply_portfolio_flow_choice(
+    session: ChatSession,
+    portfolio_flow: Optional[str],
+    current_phase: str,
+) -> bool:
+    """Apply resolved portfolio_flow. Returns True if this turn switched to retirement_planning."""
+    flow = (portfolio_flow or "").strip().lower()
+    if flow not in ("growth", "retirement"):
         return False
-    if _is_in_retirement_flow(session):
-        return False
-    # Explicit retirement request (e.g. "work on my retirement portfolio") wins over a stale
-    # "growth portfolio" line appended from the growth intake narrative in the same message.
-    if _RETIREMENT_INTENT_RE.search(message):
+    session.portfolio_flow = flow
+    if flow == "retirement":
+        session.phase = "retirement_planning"
+        session.parsed_portfolios = None
+        logger.info(
+            "portfolio_flow=retirement -> retirement_planning (was %s)",
+            current_phase,
+        )
         return True
-    if _GROWTH_INTENT_RE.search(message):
+    if current_phase in ("retirement_planning", "retirement_choosing", "retirement_refining"):
+        session.phase = "portfolio_building"
+        session.parsed_portfolios = None
+        logger.info(
+            "portfolio_flow=growth -> portfolio_building (was %s)",
+            current_phase,
+        )
+    return False
+
+
+def _sync_phase_to_portfolio_flow(session: ChatSession) -> None:
+    """Keep phase aligned with portfolio_flow before crew selection."""
+    flow = (session.portfolio_flow or "").strip().lower()
+    if flow == "retirement":
+        if session.phase in ("portfolio_building", "choosing", "refining"):
+            session.phase = "retirement_planning"
+    elif flow == "growth":
+        if session.phase in (
+            "retirement_planning",
+            "retirement_choosing",
+            "retirement_refining",
+        ) and not session.chosen_retirement_composition:
+            session.phase = "portfolio_building"
+
+
+def _portfolio_builder_is_panda(session: ChatSession) -> bool:
+    """Quala/Ana vs Panda/Emu for portfolio construction — portfolio_flow is authoritative."""
+    flow = (session.portfolio_flow or "").strip().lower()
+    if flow == "retirement":
+        return True
+    if flow == "growth":
         return False
-    return True
+    return session.phase in ("retirement_planning", "retirement_choosing", "retirement_refining")
 
 
 def _detect_finance_refinement_followup(message: str) -> bool:
@@ -2915,12 +2963,30 @@ def run_message(
     message: str,
     inputs: Optional[Dict[str, str]] = None,
     intake_payload: Optional[Dict[str, object]] = None,
+    portfolio_flow: Optional[str] = None,
+    flow_epoch: Optional[int] = None,
     retirement_refinement_after_emu: bool = False,
     user_id: Optional[str] = None,
     token_usage_source: str = "crew_money_manager",
 ) -> Dict[str, Any]:
     session = SESSION_STORE.get(session_id)
     session.history.append({"role": "user", "content": message})
+
+    if flow_epoch is not None:
+        try:
+            epoch = int(flow_epoch)
+        except (TypeError, ValueError):
+            epoch = None
+        if epoch is not None and epoch < session.last_flow_epoch:
+            session.history.pop()
+            logger.info(
+                "Ignoring stale money-manager request flow_epoch=%s < last=%s",
+                epoch,
+                session.last_flow_epoch,
+            )
+            return {"reply": "", "artifacts": {}, "agent": None, "stale": True}
+        if epoch is not None:
+            session.last_flow_epoch = epoch
 
     # Parse intake from user message and merge with existing (form data takes precedence)
     try:
@@ -2977,6 +3043,7 @@ def run_message(
         and session.phase == "post_analysis"
         and session.chosen_retirement_composition
     ):
+        session.portfolio_flow = "retirement"
         session.phase = "retirement_refining"
         logger.info(
             "retirement_refinement_after_emu: post_analysis -> retirement_refining (handoff to Panda)"
@@ -2997,19 +3064,12 @@ def run_message(
     # "Refining before choice": When user is shown 3 options (choosing/retirement_choosing) but hasn't
     # picked one. Any non-choice message = refinement (no need to explicitly say "refine" or click refine).
 
-    # Explicit switch to retirement (Panda). Growth phrases in the same blob must not block
-    # when the user also says e.g. "Yes, let's work on my retirement portfolio."
-    switched_to_retirement = False
-    if _should_switch_to_retirement_planning(message, session):
-        session.phase = "retirement_planning"
-        session.parsed_portfolios = None
-        switched_to_retirement = True
-        logger.info(
-            "User requested retirement portfolio -> phase set to retirement_planning (overriding %s)",
-            current_phase,
-        )
+    resolved_flow = _resolve_portfolio_flow(portfolio_flow, message)
+    flow_explicit = resolved_flow in ("growth", "retirement")
+    _apply_portfolio_flow_choice(session, resolved_flow, current_phase)
+    _sync_phase_to_portfolio_flow(session)
 
-    elif current_phase in ("portfolio_building", "choosing", "refining"):
+    if not flow_explicit and current_phase in ("portfolio_building", "choosing", "refining"):
         # In portfolio_building, only explicit choices (1/2/3, "option 2", "Go with the moderate portfolio")
         # count; otherwise "moderate" in the intake (e.g. "moderate risk") would skip the 3-option screen.
         allow_named = current_phase == "choosing"
@@ -3018,7 +3078,9 @@ def run_message(
         # Otherwise we'd run analyst with no portfolio (e.g. if "moderate" was in intake).
         # CRITICAL: If last agent was Panda, treat as retirement choice -> Emu (not Ana/Quala)
         last_agent = _last_assistant_agent(session)
-        is_retirement_choice = last_agent == "Panda"
+        is_retirement_choice = (
+            (session.portfolio_flow or "").lower() == "retirement" or last_agent == "Panda"
+        )
         if choice and session.parsed_portfolios and choice in session.parsed_portfolios:
             _capture_chosen_portfolio(session, message, is_retirement=is_retirement_choice)
             session.chosen_label = choice
@@ -3067,7 +3129,7 @@ def run_message(
         elif current_phase == "portfolio_building" and user_turns >= 6:
             session.phase = "choosing"
 
-    elif current_phase in ("retirement_planning", "retirement_choosing", "retirement_refining"):
+    elif not flow_explicit and current_phase in ("retirement_planning", "retirement_choosing", "retirement_refining"):
         allow_named = current_phase == "retirement_choosing"
         choice = _detect_portfolio_choice(message, allow_named=allow_named)
         if choice and session.parsed_portfolios and choice in session.parsed_portfolios:
@@ -3092,7 +3154,7 @@ def run_message(
             session.phase = "retirement_choosing"
 
     elif (
-        not switched_to_retirement
+        not flow_explicit
         and current_phase in ("analyst_running", "post_analysis")
         and (_detect_refine(message) or _detect_finance_refinement_followup(message))
     ):
@@ -3110,7 +3172,7 @@ def run_message(
         else:
             session.phase = "refining"
             logger.info("User refine (portfolio by Quala) -> refining (Quala)")
-    elif current_phase == "analyst_running":
+    elif not flow_explicit and current_phase == "analyst_running":
         # Generic follow-up during backtest phase -> move to post_analysis
         session.phase = "post_analysis"
 
@@ -3205,9 +3267,21 @@ def run_message(
                 tasks=[task],
                 process=Process.sequential,
             )
-    elif session.phase in ("retirement_planning", "retirement_choosing", "retirement_refining"):
+    elif _portfolio_builder_is_panda(session):
+        if session.phase not in (
+            "retirement_planning",
+            "retirement_choosing",
+            "retirement_refining",
+        ):
+            session.phase = "retirement_planning"
         panda_phase = (
             "retirement_refining" if session.phase == "retirement_refining" else "retirement_planning"
+        )
+        logger.info(
+            "Crew: Panda (%s) portfolio_flow=%s phase=%s",
+            panda_phase,
+            session.portfolio_flow,
+            session.phase,
         )
         task = _build_panda_task(agents["panda"], panda_phase)
         crew = Crew(
@@ -3216,6 +3290,17 @@ def run_message(
             process=Process.sequential,
         )
     else:
+        if session.phase in (
+            "retirement_planning",
+            "retirement_choosing",
+            "retirement_refining",
+        ):
+            session.phase = "portfolio_building"
+        logger.info(
+            "Crew: Quala portfolio_flow=%s phase=%s",
+            session.portfolio_flow,
+            session.phase,
+        )
         task = _build_quala_task(
             agents["money_manager"],
             session.phase,
@@ -3469,10 +3554,15 @@ def run_message(
     # Tag which agent produced this response so history matches the actual crew/task.
     # Growth: Quala builds 3 portfolios; Ana (analyst task) runs backtest tools and writes the save/scenario summary.
     # Retirement: Panda builds; Emu runs backtest / post-analysis.
-    is_retirement_analyst = bool(session.chosen_retirement_composition)
+    is_retirement_analyst = bool(session.chosen_retirement_composition) or (
+        (session.portfolio_flow or "").lower() == "retirement"
+        and session.phase in ("analyst_running", "post_analysis")
+    )
     responding_agent = (
-        ("Emu" if is_retirement_analyst else "Ana") if session.phase in ("analyst_running", "post_analysis")
-        else "Panda" if session.phase in ("retirement_planning", "retirement_choosing", "retirement_refining")
+        ("Emu" if is_retirement_analyst else "Ana")
+        if session.phase in ("analyst_running", "post_analysis")
+        else "Panda"
+        if _portfolio_builder_is_panda(session)
         else "Quala"
     )
     if panda_handoff:

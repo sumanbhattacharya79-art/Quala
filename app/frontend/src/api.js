@@ -20,11 +20,12 @@ export async function getJson(url) {
   return res.json();
 }
 
-export async function postJson(url, payload) {
+export async function postJson(url, payload, options = {}) {
   const res = await fetch(resolveApiUrl(url), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal: options.signal,
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
