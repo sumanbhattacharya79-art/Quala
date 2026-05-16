@@ -2555,6 +2555,69 @@ def _portfolio_builder_is_panda(session: ChatSession) -> bool:
     return session.phase in ("retirement_planning", "retirement_choosing", "retirement_refining")
 
 
+def _is_retirement_portfolio_session(session: ChatSession) -> bool:
+    """True when the user is in the Panda/Emu retirement portfolio path (not Quala/Ana growth)."""
+    flow = (session.portfolio_flow or "").strip().lower()
+    if flow == "retirement":
+        return True
+    if flow == "growth":
+        return False
+    if session.phase in ("retirement_planning", "retirement_choosing", "retirement_refining"):
+        return True
+    last = _last_assistant_agent(session)
+    if last in ("Panda", "Emu"):
+        return True
+    return bool(session.chosen_retirement_composition)
+
+
+def _try_apply_portfolio_pick(
+    session: ChatSession,
+    message: str,
+    current_phase: str,
+) -> bool:
+    """If user picked conservative/moderate/aggressive, route to analyst_running (Ana or Emu)."""
+    allow_named = current_phase in ("choosing", "retirement_choosing")
+    choice = _detect_portfolio_choice(message, allow_named=allow_named)
+    if not choice or not session.parsed_portfolios or choice not in session.parsed_portfolios:
+        if choice:
+            logger.warning(
+                "Portfolio choice '%s' not applied: parsed_portfolios=%s phase=%s flow=%s",
+                choice,
+                list(session.parsed_portfolios.keys()) if session.parsed_portfolios else None,
+                current_phase,
+                session.portfolio_flow,
+            )
+        return False
+
+    is_retirement = _is_retirement_portfolio_session(session)
+    if is_retirement:
+        session.portfolio_flow = "retirement"
+    _capture_chosen_portfolio(session, message, is_retirement=is_retirement)
+    session.chosen_label = choice
+    session.phase = "analyst_running"
+    session.choice_ack_pending = True
+    lbl = (choice or "your").capitalize()
+    if is_retirement:
+        session.pending_assistant_handoff = (
+            "panda",
+            f"Thanks for choosing the {lbl} portfolio. "
+            "I'm asking our analyst Emu to run backtesting and Monte Carlo using more accurate data.",
+        )
+    else:
+        session.pending_assistant_handoff = (
+            "quala",
+            f"Thank you for choosing the {lbl} portfolio. "
+            "Let me ask our analyst Ana for a detailed analysis.",
+        )
+    logger.info(
+        "User chose %s portfolio %s -> analyst_running (%s)",
+        "retirement" if is_retirement else "growth",
+        choice,
+        "Emu" if is_retirement else "Ana",
+    )
+    return True
+
+
 def _detect_finance_refinement_followup(message: str) -> bool:
     """True when a post-analysis message should route to Quala/Panda for finance Q&A, not only explicit 'refine' regex."""
     if not message or not isinstance(message, str):
@@ -3149,57 +3212,28 @@ def run_message(
     _apply_portfolio_flow_choice(session, resolved_flow, current_phase)
     _sync_phase_to_portfolio_flow(session)
 
-    if not flow_explicit and current_phase in ("portfolio_building", "choosing", "refining"):
-        # In portfolio_building, only explicit choices (1/2/3, "option 2", "Go with the moderate portfolio")
-        # count; otherwise "moderate" in the intake (e.g. "moderate risk") would skip the 3-option screen.
+    portfolio_pick_applied = False
+    if not flow_explicit:
+        portfolio_pick_applied = _try_apply_portfolio_pick(session, message, current_phase)
+
+    if not portfolio_pick_applied and not flow_explicit and current_phase in (
+        "portfolio_building",
+        "choosing",
+        "refining",
+    ):
         allow_named = current_phase == "choosing"
         choice = _detect_portfolio_choice(message, allow_named=allow_named)
-        # Only transition to analyst when we have the 3 portfolios and the user picked one.
-        # Otherwise we'd run analyst with no portfolio (e.g. if "moderate" was in intake).
-        # CRITICAL: If last agent was Panda, treat as retirement choice -> Emu (not Ana/Quala)
-        last_agent = _last_assistant_agent(session)
-        is_retirement_choice = (
-            (session.portfolio_flow or "").lower() == "retirement" or last_agent == "Panda"
-        )
-        if choice and session.parsed_portfolios and choice in session.parsed_portfolios:
-            _capture_chosen_portfolio(session, message, is_retirement=is_retirement_choice)
-            session.chosen_label = choice
-            # No confirmation step: go directly to Ana/Emu for backtesting
-            session.phase = "analyst_running"
-            session.choice_ack_pending = True
-            lbl = (choice or "your").capitalize()
-            if is_retirement_choice:
-                session.pending_assistant_handoff = (
-                    "panda",
-                    f"Thanks for choosing the {lbl} portfolio. "
-                    "I'm asking our analyst Emu to run backtesting and Monte Carlo using more accurate data.",
-                )
-            else:
-                session.pending_assistant_handoff = (
-                    "quala",
-                    f"Thank you for choosing the {lbl} portfolio. "
-                    "Let me ask our analyst Ana for a detailed analysis.",
-                )
-            logger.info(
-                "User chose %s portfolio %s -> running %s for backtest",
-                "retirement" if is_retirement_choice else "growth",
-                choice,
-                "Emu" if is_retirement_choice else "Ana",
-            )
-        else:
-            if choice and (not session.parsed_portfolios or choice not in (session.parsed_portfolios or {})):
-                logger.warning(
-                    "Portfolio choice '%s' not applied: parsed_portfolios=%s",
-                    choice,
-                    list(session.parsed_portfolios.keys()) if session.parsed_portfolios else None,
-                )
-            elif not choice and current_phase == "choosing":
-                logger.info("No portfolio choice detected in message (allow_named=%s)", allow_named)
         if session.phase != "analyst_running" and (
             _detect_refine(message)
-            or (current_phase == "choosing" and not (choice and session.parsed_portfolios and choice in (session.parsed_portfolios or {})))
+            or (
+                current_phase == "choosing"
+                and not (
+                    choice
+                    and session.parsed_portfolios
+                    and choice in (session.parsed_portfolios or {})
+                )
+            )
         ):
-            # Route to agent that created the portfolios: Panda -> retirement_refining, Quala -> refining
             if _refinement_agent(session) == "Panda":
                 session.phase = "retirement_refining"
                 logger.info("User refine (portfolio by Panda) -> retirement_refining (Panda)")
@@ -3209,26 +3243,22 @@ def run_message(
         elif current_phase == "portfolio_building" and user_turns >= 6:
             session.phase = "choosing"
 
-    elif not flow_explicit and current_phase in ("retirement_planning", "retirement_choosing", "retirement_refining"):
+    elif not portfolio_pick_applied and not flow_explicit and current_phase in (
+        "retirement_planning",
+        "retirement_choosing",
+        "retirement_refining",
+    ):
         allow_named = current_phase == "retirement_choosing"
         choice = _detect_portfolio_choice(message, allow_named=allow_named)
-        if choice and session.parsed_portfolios and choice in session.parsed_portfolios:
-            _capture_chosen_portfolio(session, message, is_retirement=True)
-            session.chosen_label = choice
-            session.phase = "analyst_running"
-            session.choice_ack_pending = True
-            lbl = (choice or "your").capitalize()
-            session.pending_assistant_handoff = (
-                "panda",
-                f"Thanks for choosing the {lbl} portfolio. "
-                "I'm asking our analyst Emu to run backtesting and Monte Carlo using more accurate data.",
-            )
-            logger.info("User chose retirement portfolio %s -> running Emu for backtest", choice)
-        elif _detect_refine(message) or (
+        if _detect_refine(message) or (
             current_phase == "retirement_choosing"
-            and not (choice and session.parsed_portfolios and choice in (session.parsed_portfolios or {}))
+            and not (
+                choice
+                and session.parsed_portfolios
+                and choice in (session.parsed_portfolios or {})
+            )
         ):
-            session.phase = "retirement_refining"  # Retirement flow: any non-choice in choosing = refine
+            session.phase = "retirement_refining"
             logger.info("User refine retirement portfolio before choosing -> retirement_refining (Panda)")
         elif current_phase == "retirement_planning" and user_turns >= 2:
             session.phase = "retirement_choosing"
@@ -3316,7 +3346,15 @@ def run_message(
 
     # ---- pick the right crew for the phase ----
     if session.phase == "analyst_running":
-        if session.chosen_retirement_composition:
+        if (
+            session.chosen_retirement_composition
+            or (
+                _is_retirement_portfolio_session(session)
+                and session.chosen_composition
+            )
+        ):
+            if not session.chosen_retirement_composition and session.chosen_composition:
+                session.chosen_retirement_composition = dict(session.chosen_composition)
             logger.info("Building Emu crew for retirement backtest (chosen_portfolio=%s)", bool(session.chosen_portfolio))
             task = _build_emu_task(agents["emu"])
             crew = Crew(
@@ -3399,6 +3437,11 @@ def run_message(
     if session.phase == "analyst_running" and session.chosen_composition and isinstance(
         session.chosen_composition, dict
     ):
+        if (
+            _is_retirement_portfolio_session(session)
+            and not session.chosen_retirement_composition
+        ):
+            session.chosen_retirement_composition = dict(session.chosen_composition)
         try:
             tickers = list(session.chosen_composition.keys())
             # Check and fetch missing
@@ -3676,12 +3719,19 @@ def run_message(
             logger.info("Parsed portfolio JSON from %s: %s", responding_agent, list(parsed.keys()))
             # So the next user message can be a choice (e.g. "go with aggressive"), transition to choosing
             choice_keys = {k.lower() for k in parsed if k.lower() in ("conservative", "moderate", "aggressive")}
-            if len(choice_keys) >= 2 and session.phase == "portfolio_building":
-                session.phase = "choosing"
-                logger.info("Quala returned %d portfolio options -> phase set to choosing", len(choice_keys))
-            elif len(choice_keys) >= 2 and session.phase in ("retirement_planning", "retirement_refining"):
-                session.phase = "retirement_choosing"
-                logger.info("Panda returned %d retirement portfolio options -> phase set to retirement_choosing", len(choice_keys))
+            if len(choice_keys) >= 2:
+                if _is_retirement_portfolio_session(session):
+                    session.phase = "retirement_choosing"
+                    logger.info(
+                        "Panda returned %d retirement portfolio options -> phase set to retirement_choosing",
+                        len(choice_keys),
+                    )
+                elif session.phase == "portfolio_building":
+                    session.phase = "choosing"
+                    logger.info(
+                        "Quala returned %d portfolio options -> phase set to choosing",
+                        len(choice_keys),
+                    )
 
 
         output_str = _strip_portfolios_json(output_str)
