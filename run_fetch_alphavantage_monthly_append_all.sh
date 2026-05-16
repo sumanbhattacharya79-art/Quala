@@ -75,7 +75,7 @@ for ((i = 0; i < n; i++)); do
 done
 
 if [[ "$failed" -gt 0 ]]; then
-  echo "Finished with ${failed} failed step(s)." >&2
-  exit 1
+  echo "Finished with ${failed} failed step(s). (Continuing; see ERROR logs above.)" >&2
 fi
 echo "Done (${n} tickers)."
+exit 0

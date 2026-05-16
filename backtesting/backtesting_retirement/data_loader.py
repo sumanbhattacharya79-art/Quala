@@ -63,11 +63,12 @@ def load_monthly_prices(
     series: Dict[str, pd.Series] = {}
     for ticker in tickers:
         load_ticker = _resolve_ticker(ticker, ticker_substitution)
-        path = out_dir / f"{load_ticker.lower()}_monthly.csv"
-        if not path.exists():
-            path = out_dir / f"{load_ticker}_monthly.csv"
+        from backtesting.price_data_paths import monthly_csv_path
+
+        path = monthly_csv_path(out_dir, load_ticker)
         if not path.exists() and fetch_if_missing:
             _fetch_monthly_prices(load_ticker, out_dir)
+            path = monthly_csv_path(out_dir, load_ticker)
         if not path.exists():
             raise FileNotFoundError(f"Missing price file: {path}")
         df = pd.read_csv(path)

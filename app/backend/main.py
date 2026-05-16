@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import io
 import json
 import logging
@@ -14,6 +15,7 @@ _log = logging.getLogger(__name__)
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
@@ -131,6 +133,11 @@ from backend.portfolio_valuation import (  # noqa: E402
     refresh_all_valuations_for_user,
     refresh_portfolio_valuation,
 )
+from backend.data_output_gcs import (  # noqa: E402
+    bootstrap_data_output_from_gcs_in_background,
+    start_periodic_gcs_sync,
+    stop_periodic_gcs_sync,
+)
 
 FRONTEND_DIR = PROJECT_ROOT / "app" / "frontend"
 FRONTEND_DIST = FRONTEND_DIR / "dist"  # React build output (app1.jsx look + app.js logic)
@@ -239,6 +246,26 @@ class IntakeDataRequest(BaseModel):
 
 
 app = FastAPI(title="Portfolio Optimizer")
+
+# Browser clients on another origin (e.g. Vercel) need CORS. Comma-separated extra origins in CORS_ORIGINS.
+_cors_extra = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+_cors_regex = os.environ.get("CORS_ORIGIN_REGEX")
+if _cors_regex == "":
+    _cors_regex = None
+elif _cors_regex is None:
+    _cors_regex = r"https://.*\.vercel\.app"
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        *_cors_extra,
+    ],
+    allow_origin_regex=_cors_regex,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _static_dir() -> Path:
@@ -482,13 +509,16 @@ def create_portfolio(payload: PortfolioRequest) -> Dict[str, object]:
 
 @app.on_event("startup")
 def _init_saved_portfolios_db() -> None:
-    """Initialize saved_portfolios table on startup."""
+    """Initialize DB; pull market data from GCS in background when configured."""
+    bootstrap_data_output_from_gcs_in_background()
+    start_periodic_gcs_sync()
     init_db()
 
 
 @app.on_event("shutdown")
 def _close_postgres_pool() -> None:
     """Release Supabase / Postgres pool handles on process exit."""
+    stop_periodic_gcs_sync()
     close_db_pool()
 
 
@@ -1912,7 +1942,7 @@ def run_backtest(payload: BacktestRequest) -> Dict[str, object]:
     # When build_prices_for_leveraged_portfolio was used, backtest already has 3x underlying.
     # Only substitute for MC when leveraged but we did NOT use adjusted prices.
     if has_leveraged and not mc_leveraged_substitution:
-        price_data = prices.resample("M").last().dropna(how="all") if frequency == "monthly" else prices
+        price_data = prices.resample("ME").last().dropna(how="all") if frequency == "monthly" else prices
         returns_df = price_data.pct_change().dropna(how="any")
         if not returns_df.empty:
             mc_returns, mc_leveraged_substitution = get_mc_returns_for_leveraged_portfolio(

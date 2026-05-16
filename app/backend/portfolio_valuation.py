@@ -43,9 +43,11 @@ def _pick_close_column(df: pd.DataFrame) -> Optional[str]:
 
 def load_ohlc_frame(ticker: str) -> Optional[pd.DataFrame]:
     """Load daily CSV if present, else monthly. Returns sorted frame with DatetimeIndex."""
+    from backtesting.price_data_paths import monthly_csv_path
+
     t = ticker.upper().strip()
-    for fname in (f"{t}_daily.csv", f"{t}_monthly.csv"):
-        path = DATA_OUTPUT / fname
+    candidates = [DATA_OUTPUT / f"{t}_daily.csv", monthly_csv_path(DATA_OUTPUT, t)]
+    for path in candidates:
         if not path.exists():
             continue
         try:

@@ -10,13 +10,19 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
+from alphavantage_apikey import load_alphavantage_api_key
 from alphavantage_merge_utils import (
     atomic_write_csv,
     merge_sector_weights_history,
 )
+from list_data_output_tickers import refresh_tickers_list_after_fetch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_OUTPUT_DIR = PROJECT_ROOT / "data_output"
@@ -66,15 +72,6 @@ MATERIALS_TICKERS = {
 }
 
 
-def _load_apikey(default_key: str) -> str:
-    key_path = Path(__file__).resolve().parents[1] / "alphavantage_apikey.txt"
-    if key_path.exists():
-        key = key_path.read_text().strip()
-        if key:
-            return key
-    return default_key
-
-
 def _parse_first_json_blob(response_text: str) -> Any:
     """Handle cases where response may contain multiple JSON blobs."""
     text = response_text.strip()
@@ -111,7 +108,7 @@ def _map_sector_to_spy(raw_sector: str) -> str:
     mapped = SPY_SECTOR_MAP.get(cleaned.upper())
     if mapped:
         return mapped
-    raise ValueError(f"Unmapped sector '{raw_sector}'")
+    raise ValueError(f"Unmapped sector '{raw_sector}' (sector not found for mapping)")
 
 
 def _map_sector_weights_to_spy(sector_weights: dict[str, float]) -> dict[str, float]:
@@ -149,11 +146,8 @@ def _fetch_symbol_type(ticker: str, apikey: str, insecure: bool) -> str:
     best_matches = data.get("bestMatches", [])
     if not best_matches:
         note = data.get("Note") or data.get("Information") or data.get("Error Message")
-        if note:
-            raise ValueError(
-                f"No symbol search matches found for ticker '{ticker}'. Alpha Vantage note: {note}"
-            )
-        raise ValueError(f"No symbol search matches found for ticker '{ticker}'")
+        detail = f" Alpha Vantage: {note}" if note else ""
+        raise ValueError(f"No symbol search matches for ticker '{ticker}'.{detail}")
     if not isinstance(best_matches, list):
         raise ValueError(f"Unexpected bestMatches payload: {best_matches}")
 
@@ -173,7 +167,7 @@ def _fetch_equity_sector_weights(ticker: str, apikey: str, insecure: bool) -> di
     data = _get_json(url, insecure=insecure)
     sector = str(data.get("Sector", "")).strip()
     if not sector:
-        raise ValueError(f"No Sector found in OVERVIEW response for ticker '{ticker}'")
+        raise ValueError(f"No Sector field in OVERVIEW for ticker '{ticker}' (sector not found)")
     return {_map_sector_to_spy(sector): 1.0}
 
 
@@ -186,7 +180,9 @@ def _fetch_etf_sector_weights(ticker: str, apikey: str, insecure: bool) -> dict[
     #print(data)
     sectors = data.get("sectors", [])
     if not isinstance(sectors, list) or not sectors:
-        raise ValueError(f"No sectors found in ETF_PROFILE response for ticker '{ticker}'")
+        raise ValueError(
+            f"No sectors list in ETF_PROFILE for ticker '{ticker}' (ETF sector weights not found)"
+        )
 
     result: dict[str, float] = {}
     for entry in sectors:
@@ -202,7 +198,9 @@ def _fetch_etf_sector_weights(ticker: str, apikey: str, insecure: bool) -> dict[
             continue
 
     if not result:
-        raise ValueError(f"Unable to parse ETF sector weights for ticker '{ticker}'")
+        raise ValueError(
+            f"Could not parse usable ETF sector weights for ticker '{ticker}' (weights not found)"
+        )
     return _map_sector_weights_to_spy(result)
 
 
@@ -221,12 +219,13 @@ def write_sector_weights_csv(ticker: str, sector_weights: dict[str, float], out_
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
     parser = argparse.ArgumentParser(
         description="Fetch Alpha Vantage sector weights for a ticker."
     )
     parser.add_argument(
         "--apikey",
-        default=_load_apikey("3VTYJRVCL6BTS18C"),
+        default=load_alphavantage_api_key("3VTYJRVCL6BTS18C"),
         help="Alpha Vantage API key.",
     )
     parser.add_argument(
@@ -247,36 +246,68 @@ def main() -> None:
     args = parser.parse_args()
 
     ticker = args.ticker.upper().strip()
-    if _is_usd_crypto_ticker(ticker):
-        sector_weights = {"crypto": 1.0}
-    elif ticker in MATERIALS_TICKERS:
-        sector_weights = {"Materials": 1.0}
-    else:
-        asset_type = _fetch_symbol_type(ticker=ticker, apikey=args.apikey, insecure=args.insecure)
-        #print("asset_type", asset_type)
-        if asset_type == "Equity":
-            sector_weights = _fetch_equity_sector_weights(
-                ticker=ticker, apikey=args.apikey, insecure=args.insecure
-            )
-        elif asset_type == "ETF":
-            sector_weights = _fetch_etf_sector_weights(
-                ticker=ticker, apikey=args.apikey, insecure=args.insecure
-            )
+    try:
+        if _is_usd_crypto_ticker(ticker):
+            sector_weights = {"crypto": 1.0}
+        elif ticker in MATERIALS_TICKERS:
+            sector_weights = {"Materials": 1.0}
         else:
-            raise ValueError(
-                f"Unsupported asset type '{asset_type}' for ticker '{ticker}'. "
-                "Supported types: Equity, ETF."
-            )
+            asset_type = _fetch_symbol_type(ticker=ticker, apikey=args.apikey, insecure=args.insecure)
+            if asset_type == "Equity":
+                sector_weights = _fetch_equity_sector_weights(
+                    ticker=ticker, apikey=args.apikey, insecure=args.insecure
+                )
+            elif asset_type == "ETF":
+                sector_weights = _fetch_etf_sector_weights(
+                    ticker=ticker, apikey=args.apikey, insecure=args.insecure
+                )
+            else:
+                logger.error(
+                    "sector weights not available: ticker=%s unsupported asset_type=%s",
+                    ticker,
+                    asset_type,
+                )
+                sys.exit(0)
 
-    root = DATA_OUTPUT_DIR
-    write_sector_weights_csv(ticker, sector_weights, out_dir=root)
-    if args.append:
-        as_of = datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()
-        hist_path = root / f"{ticker.lower()}_sector_weights_history.csv"
-        merged = merge_sector_weights_history(hist_path, as_of, sector_weights)
-        atomic_write_csv(merged, hist_path, index=False)
-        print(f"Appended history to {hist_path} ({len(merged)} rows)")
-    print(f"{ticker}, {json.dumps(sector_weights, sort_keys=True)}")
+        root = DATA_OUTPUT_DIR
+        sw_path = write_sector_weights_csv(ticker, sector_weights, out_dir=root)
+        if args.append:
+            as_of = datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()
+            hist_path = root / f"{ticker.lower()}_sector_weights_history.csv"
+            try:
+                merged = merge_sector_weights_history(hist_path, as_of, sector_weights)
+                atomic_write_csv(merged, hist_path, index=False)
+                print(f"Appended history to {hist_path} ({len(merged)} rows)")
+            except Exception as exc:
+                logger.error(
+                    "sector weights history not updated: ticker=%s (history merge failed: %s)",
+                    ticker,
+                    exc,
+                )
+        print(f"{ticker}, {json.dumps(sector_weights, sort_keys=True)}")
+        refresh_tickers_list_after_fetch(
+            root, log=logger, gcs_upload_relative=(sw_path.name,)
+        )
+    except ValueError as exc:
+        err = str(exc)
+        el = err.lower()
+        if "etf_profile" in el or "etf sector weights" in el or "weights not found" in el:
+            logger.error("ETF sector weights not found: ticker=%s detail=%s", ticker, err)
+        elif "sector not found" in el or "unmapped sector" in el or "no sector field" in el:
+            logger.error("sector not found: ticker=%s detail=%s", ticker, err)
+        elif "symbol search" in el or "bestmatches" in el or "no symbol" in el:
+            logger.error("ticker not found in symbol search: ticker=%s detail=%s", ticker, err)
+        elif "cannot map empty" in el:
+            logger.error("sector not found: ticker=%s detail=%s", ticker, err)
+        else:
+            logger.error("sector weights fetch skipped: ticker=%s detail=%s", ticker, err)
+        sys.exit(0)
+    except requests.RequestException as exc:
+        logger.error("sector weights request failed: ticker=%s detail=%s", ticker, exc)
+        sys.exit(0)
+    except Exception as exc:
+        logger.exception("sector weights unexpected error: ticker=%s", ticker)
+        sys.exit(0)
 
 
 if __name__ == "__main__":

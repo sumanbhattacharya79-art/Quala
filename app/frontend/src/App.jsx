@@ -3392,6 +3392,9 @@ export default function App() {
         let intake = userId ? (getIntakeFromForm() ?? (await getJson(`/api/user/intake?user_id=${encodeURIComponent(userId)}`).catch(() => null))) : getIntakeFromFormOrState();
         const retirementLine = "Yes, let's work on my retirement portfolio.";
         let msg = savedIntakeMessage?.trim() || "";
+        if (msg) {
+          msg = msg.replace(/\n*I want to build a growth portfolio for retirement\.?\s*$/i, "").trim();
+        }
         let appendUserBubble = true;
         if (intake) {
           if (!msg) {

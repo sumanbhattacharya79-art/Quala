@@ -437,7 +437,13 @@ def _returns_to_paths_with_intake(
     for t in range(1, n_periods):
         val = paths[:, t - 1] * (1 + sampled_returns[:, t]) + contrib_at_period(t)
         for exp in intake.upcoming_expenses or []:
-            exp_years, exp_amount = float(exp[0]), float(exp[1])
+            if isinstance(exp, dict):
+                exp_years = float(exp.get("years", exp.get("years_from_start", 0)) or 0)
+                exp_amount = float(exp.get("amount", exp.get("value", 0)) or 0)
+            elif isinstance(exp, (list, tuple)) and len(exp) >= 2:
+                exp_years, exp_amount = float(exp[0]), float(exp[1])
+            else:
+                continue
             exp_key = (exp_years, exp_amount)
             if exp_key in applied_expenses:
                 continue

@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 import subprocess
 import sys
 import json
@@ -12,6 +13,10 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+_log = logging.getLogger(__name__)
+
+from backtesting.price_data_paths import monthly_csv_exists, monthly_csv_path, read_monthly_price_dataframe
 
 from backtesting.backtesting_service import (
     backtest_portfolio,
@@ -138,13 +143,22 @@ _CRYPTO_TICKER_ALIAS: dict[str, str] = {
     "STX-USD": "STX", "PEPE-USD": "PEPE", "WLD-USD": "WLD", "SHIB-USD": "SHIB",
 }
 
+# Spot Bitcoin / crypto ETFs: use QQQ monthly series for returns (matches agent backtest proxy).
+_SPOT_CRYPTO_ETF_PROXY_QQQ: frozenset[str] = frozenset({
+    "IBIT", "GBTC", "FBTC", "BITO", "ARKB", "BTCO", "EZBC", "HODL", "BRRR",
+})
+
 
 def resolve_load_ticker(
     ticker: str, ticker_substitution: dict[str, str] | None = None
 ) -> str:
     """Resolve ticker to data file symbol (crypto XXX-USD -> XXX, substitution)."""
     sub = ticker_substitution or {}
-    load_ticker = sub.get(ticker, ticker)
+    load_ticker = sub.get(ticker)
+    if load_ticker is None and ticker.upper() in _SPOT_CRYPTO_ETF_PROXY_QQQ:
+        load_ticker = "QQQ"
+    if load_ticker is None:
+        load_ticker = ticker
     if load_ticker.upper().endswith("-USD"):
         load_ticker = _CRYPTO_TICKER_ALIAS.get(
             load_ticker.upper(), load_ticker.upper().split("-")[0]
@@ -191,28 +205,38 @@ def load_prices_from_data_output(
     series = {}
     for ticker in tickers:
         load_ticker = resolve_load_ticker(ticker, sub)
-        filename = f"{load_ticker.lower()}_monthly.csv"
-        file_path = data_output_dir / filename
+        file_path = monthly_csv_path(data_output_dir, load_ticker)
         if not file_path.exists():
             _fetch_alphavantage_price(data_output_dir, load_ticker)
+            file_path = monthly_csv_path(data_output_dir, load_ticker)
         if not file_path.exists():
             raise FileNotFoundError(f"Missing price file: {file_path}")
-        df = pd.read_csv(file_path)
-        if "date" not in df.columns or "close" not in df.columns:
-            raise ValueError(f"File {file_path} must contain 'date' and 'close' columns.")
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.set_index("date").sort_index()
+        df = read_monthly_price_dataframe(file_path)
         close = df["close"].astype(float)
-        div_col = _dividend_column(df, file_path)
-        div = df[div_col].astype(float) if div_col else pd.Series(0.0, index=close.index)
+        raw = pd.read_csv(file_path)
+        if "date" in raw.columns:
+            raw["date"] = pd.to_datetime(raw["date"], errors="coerce")
+            raw = raw.set_index("date").sort_index()
+        div_col = _dividend_column(raw, file_path)
+        div = (
+            pd.to_numeric(raw[div_col], errors="coerce").reindex(close.index).fillna(0.0)
+            if div_col
+            else pd.Series(0.0, index=close.index)
+        )
         series[ticker] = _build_total_return_series(close, div)
     prices = pd.DataFrame(series).dropna(how="all")
     return drop_current_month_data(prices)
 
 
 def _fetch_alphavantage_price(data_output_dir: Path, ticker: str) -> None:
-    script_path = Path(__file__).resolve().parents[1] / "data_input" / "fetch_alphavantage_example.py"
+    """If ``{ticker}_monthly.csv`` is missing, run ``fetch_alphavantage_example.py`` (monthly adjusted).
+
+    Writes to ``PROJECT_ROOT/data_output`` (same as ``data_output_dir`` when using default layout).
+    Requires ``ALPHAVANTAGE_API_KEY`` on Cloud Run; failures are logged (subprocess stderr).
+    """
+    script_path = PROJECT_ROOT / "data_input" / "fetch_alphavantage_example.py"
     if not script_path.exists():
+        _log.warning("Alpha Vantage fetch skipped: missing script %s", script_path)
         return
     data_output_dir.mkdir(parents=True, exist_ok=True)
     command = [
@@ -222,25 +246,54 @@ def _fetch_alphavantage_price(data_output_dir: Path, ticker: str) -> None:
         ticker,
         "--insecure",
     ]
-    subprocess.run(command, check=False)
+    try:
+        proc = subprocess.run(
+            command,
+            check=False,
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        _log.warning("Alpha Vantage fetch timed out for %s", ticker)
+        return
+    out_path = monthly_csv_path(data_output_dir, ticker)
+    if proc.returncode != 0:
+        _log.warning(
+            "Alpha Vantage fetch failed for %s (exit %s): stderr=%s",
+            ticker,
+            proc.returncode,
+            (proc.stderr or "").strip()[:800] or (proc.stdout or "").strip()[:800],
+        )
+    elif not out_path.exists():
+        _log.warning(
+            "Alpha Vantage fetch exited 0 for %s but file missing: %s",
+            ticker,
+            out_path,
+        )
 
 
 def load_single_price_series(data_output_dir: Path, ticker: str) -> pd.Series:
     """Load total-return price series (close + reinvested dividends) for one ticker."""
-    filename = f"{ticker.lower()}_monthly.csv"
-    file_path = data_output_dir / filename
+    file_path = monthly_csv_path(data_output_dir, ticker)
     if not file_path.exists():
         _fetch_alphavantage_price(data_output_dir, ticker)
+        file_path = monthly_csv_path(data_output_dir, ticker)
     if not file_path.exists():
         raise FileNotFoundError(f"Missing price file: {file_path}")
-    df = pd.read_csv(file_path)
-    if "date" not in df.columns or "close" not in df.columns:
-        raise ValueError(f"File {file_path} must contain 'date' and 'close' columns.")
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.set_index("date").sort_index()
+    df = read_monthly_price_dataframe(file_path)
     close = df["close"].astype(float)
-    div_col = _dividend_column(df, file_path)
-    div = df[div_col].astype(float) if div_col else pd.Series(0.0, index=close.index)
+    raw = pd.read_csv(file_path)
+    if "date" in raw.columns:
+        raw["date"] = pd.to_datetime(raw["date"], errors="coerce")
+        raw = raw.set_index("date").sort_index()
+    div_col = _dividend_column(raw, file_path)
+    div = (
+        pd.to_numeric(raw[div_col], errors="coerce").reindex(close.index).fillna(0.0)
+        if div_col
+        else pd.Series(0.0, index=close.index)
+    )
     series = _build_total_return_series(close, div)
     return drop_current_month_data(series)
 
@@ -415,7 +468,7 @@ def run_backtests(
     benchmark_returns = benchmark_prices.pct_change().dropna()
 
     # Asset correlations and per-asset metrics for UI table
-    price_data = prices.resample("M").last().dropna(how="all") if frequency == "monthly" else prices
+    price_data = prices.resample("ME").last().dropna(how="all") if frequency == "monthly" else prices
     asset_returns = price_data.pct_change().dropna(how="any")
     asset_correlations = (
         compute_asset_correlations(asset_returns, frequency, weights=portfolio)
@@ -480,7 +533,7 @@ def run_backtests(
         # When we used build_prices_for_leveraged_portfolio, backtest already has 3x underlying.
         # Only substitute for MC when we have leveraged but did NOT use adjusted prices (e.g. API path).
         if has_leveraged and not mc_leveraged_substitution:
-            price_data = prices.resample("M").last().dropna(how="all") if frequency == "monthly" else prices
+            price_data = prices.resample("ME").last().dropna(how="all") if frequency == "monthly" else prices
             returns_df = price_data.pct_change().dropna(how="any")
             if not returns_df.empty:
                 mc_returns, mc_leveraged_substitution = get_mc_returns_for_leveraged_portfolio(

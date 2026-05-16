@@ -134,7 +134,7 @@ def _resample_prices(prices: pd.DataFrame, frequency: str) -> pd.DataFrame:
     if frequency == "daily":
         return prices
     if frequency == "monthly":
-        return prices.resample("M").last().dropna(how="all")
+        return prices.resample("ME").last().dropna(how="all")
     raise ValueError("Unsupported frequency. Use 'daily' or 'monthly'.")
 
 

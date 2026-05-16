@@ -90,7 +90,7 @@ def run_retirement_backtest(
     data_end = price_dates.max().strftime("%Y-%m") if len(price_dates) > 0 else None
 
     # Monthly price returns → correlation matrix for UI (aligned with growth driver.py)
-    price_m = prices.resample("M").last().dropna(how="all")
+    price_m = prices.resample("ME").last().dropna(how="all")
     asset_return_df = price_m.pct_change().dropna(how="any")
     asset_correlations = (
         compute_asset_correlations(asset_return_df, "monthly", weights=weights)

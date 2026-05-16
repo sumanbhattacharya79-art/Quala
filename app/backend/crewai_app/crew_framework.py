@@ -32,6 +32,7 @@ from backend.sector_industry_taxonomy import (
 from backend.alphavantage_sector_bridge import get_preferred_portfolio_sector_weights
 
 from backtesting.driver import resolve_load_ticker, _CRYPTO_TICKER_ALIAS
+from backtesting.price_data_paths import monthly_csv_exists, monthly_csv_path
 
 from .gemini_token_usage import crew_gemini_model_litellm, extract_crew_usage_token_counts, log_crewai_usage
 
@@ -130,7 +131,7 @@ class CheckTickerDataTool(BaseTool):
         present, missing = [], []
         for ticker in ticker_list:
             load_ticker = resolve_load_ticker(ticker)
-            path = DATA_OUTPUT_DIR / f"{load_ticker.lower()}_monthly.csv"
+            path = monthly_csv_path(DATA_OUTPUT_DIR, load_ticker)
             (present if path.exists() else missing).append(ticker)
         return json.dumps({"present": present, "missing": missing})
 
@@ -148,7 +149,7 @@ class FetchTickerDataTool(BaseTool):
         results = []
         for ticker in ticker_list:
             load_ticker = resolve_load_ticker(ticker)
-            path = DATA_OUTPUT_DIR / f"{load_ticker.lower()}_monthly.csv"
+            path = monthly_csv_path(DATA_OUTPUT_DIR, load_ticker)
             if path.exists():
                 results.append(f"{ticker}: already exists, skipped")
                 continue
@@ -158,13 +159,14 @@ class FetchTickerDataTool(BaseTool):
                     "--symbol", load_ticker, "--insecure",
                 ]
                 subprocess.run(
-                    cmd, check=True, timeout=120,
+                    cmd, check=False, timeout=120,
                     capture_output=True, text=True,
+                    cwd=str(PROJECT_ROOT),
                 )
                 results.append(
                     f"{ticker}: fetched successfully"
-                    if path.exists()
-                    else f"{ticker}: fetch ran but file not created"
+                    if monthly_csv_exists(DATA_OUTPUT_DIR, load_ticker)
+                    else f"{ticker}: fetch ran but file not created (check API key / rate limit)"
                 )
             except Exception as exc:
                 results.append(f"{ticker}: fetch failed – {exc}")
@@ -334,6 +336,11 @@ MIN_MONTHLY_ROWS = 240  # ~20 years of monthly data
 # Crypto tickers use QQQ as proxy for backtest/MC (no crypto price history in data_output).
 _CRYPTO_TICKERS: set[str] = set(_CRYPTO_TICKER_ALIAS.keys()) | set(_CRYPTO_TICKER_ALIAS.values())
 
+# Spot-crypto / Bitcoin ETFs: same proxy as on-chain crypto (short or no monthly series in data_output).
+_DIGITAL_ASSET_ETF_TICKERS: frozenset[str] = frozenset({
+    "IBIT", "GBTC", "FBTC", "BITO", "ARKB", "BTCO", "EZBC", "HODL", "BRRR",
+})
+
 # Static mapping: tickers with short history -> correlated substitute with longer history
 # Used when LLM lookup fails or is unavailable. Substitutes should have >= 240 monthly rows.
 _TICKER_SUBSTITUTE_FALLBACK: dict[str, str] = {
@@ -386,18 +393,23 @@ def _find_correlated_ticker(ticker: str) -> str | None:
 
 def _fetch_ticker_data(ticker: str) -> bool:
     """Fetch monthly price data for ticker. Returns True if file exists after fetch."""
-    path = DATA_OUTPUT_DIR / f"{ticker.lower()}_monthly.csv"
-    if path.exists():
+    if monthly_csv_exists(DATA_OUTPUT_DIR, ticker):
         return True
     try:
-        subprocess.run(
+        proc = subprocess.run(
             [sys.executable, str(FETCH_SCRIPT), "--symbol", ticker, "--insecure"],
-            check=True, timeout=120, capture_output=True, text=True,
+            check=True,
+            timeout=120,
+            capture_output=True,
+            text=True,
             cwd=str(PROJECT_ROOT),
         )
+    except subprocess.CalledProcessError as exc:
+        err = (exc.stderr or "").strip()[:800] or (exc.stdout or "").strip()[:800]
+        logger.warning("Fetch failed for %s (exit %s): %s", ticker, exc.returncode, err)
     except Exception as exc:
         logger.warning("Fetch failed for %s: %s", ticker, exc)
-    return path.exists()
+    return monthly_csv_exists(DATA_OUTPUT_DIR, ticker)
 
 
 def _ensure_sufficient_data(
@@ -409,14 +421,16 @@ def _ensure_sufficient_data(
     Crypto tickers always use QQQ as proxy for backtest/MC."""
     substitution: dict[str, str] = {}
     for ticker in tickers:
-        # Crypto: always use QQQ as proxy (no crypto price history in data_output)
-        if ticker.upper() in _CRYPTO_TICKERS:
+        # Crypto / digital-asset ETFs: use QQQ as proxy (no long monthly history in data_output)
+        u = ticker.upper()
+        if u in _CRYPTO_TICKERS or u in _DIGITAL_ASSET_ETF_TICKERS:
             substitution[ticker] = "QQQ"
-            logger.info("Using QQQ for crypto %s (backtest/MC proxy)", ticker)
+            logger.info("Using QQQ for %s (backtest/MC proxy)", ticker)
             continue
-        path = data_output_dir / f"{ticker.lower()}_monthly.csv"
+        path = monthly_csv_path(data_output_dir, ticker)
         if not path.exists():
             _fetch_ticker_data(ticker)
+            path = monthly_csv_path(data_output_dir, ticker)
         n = _count_csv_lines(path)
         if n >= MIN_MONTHLY_ROWS:
             continue
@@ -427,8 +441,8 @@ def _ensure_sufficient_data(
         if not _fetch_ticker_data(substitute):
             logger.warning("Failed to fetch substitute %s for %s", substitute, ticker)
             continue
-        sub_path = data_output_dir / f"{substitute.lower()}_monthly.csv"
-        if _count_csv_lines(sub_path) >= MIN_MONTHLY_ROWS:
+        sub_path = monthly_csv_path(data_output_dir, substitute)
+        if sub_path.exists() and _count_csv_lines(sub_path) >= MIN_MONTHLY_ROWS:
             substitution[ticker] = substitute
             logger.info("Using %s for %s (insufficient data: %d rows)", substitute, ticker, n)
     return substitution
@@ -1120,12 +1134,23 @@ class RunBacktestTool(BaseTool):
             missing = []
             for t in all_tickers:
                 load_ticker = resolve_load_ticker(t, ticker_substitution)
-                if not (DATA_OUTPUT_DIR / f"{load_ticker.lower()}_monthly.csv").exists():
+                if not monthly_csv_exists(DATA_OUTPUT_DIR, load_ticker):
                     missing.append(t)
+            if missing:
+                logger.info(
+                    "RunBacktestTool: portfolio CSVs still missing after ensure step: %s; retrying Alpha Vantage",
+                    missing,
+                )
+                retry_missing: list[str] = []
+                for t in missing:
+                    load_ticker = resolve_load_ticker(t, ticker_substitution)
+                    if not _fetch_ticker_data(load_ticker):
+                        retry_missing.append(t)
+                missing = retry_missing
             for bench_sym in ("SPY", "AGG"):
-                if not (DATA_OUTPUT_DIR / f"{bench_sym.lower()}_monthly.csv").exists():
+                if not monthly_csv_exists(DATA_OUTPUT_DIR, bench_sym):
                     _fetch_ticker_data(bench_sym)
-                if not (DATA_OUTPUT_DIR / f"{bench_sym.lower()}_monthly.csv").exists():
+                if not monthly_csv_exists(DATA_OUTPUT_DIR, bench_sym):
                     missing.append(f"{bench_sym} (60/40 benchmark)")
             if missing:
                 return (
@@ -1386,12 +1411,22 @@ class RunBacktestTool(BaseTool):
             )
             return "\n".join(observation_parts)
         except FileNotFoundError as exc:
+            logger.warning("RunBacktestTool missing data: %s", exc)
             return (
                 f"Data error: {exc}. "
                 "Use fetch_ticker_data first for the missing tickers."
             )
         except Exception as exc:
-            return f"Backtest error: {exc}"
+            logger.error(
+                "RunBacktestTool failed: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            logger.exception("RunBacktestTool failed (traceback)")
+            return (
+                f"Backtest error ({type(exc).__name__}): {exc}. "
+                "If this persists after redeploy, check Cloud Run logs for quala-api."
+            )
 
 
 # ------------------------------------------------------------------ #
@@ -2435,6 +2470,21 @@ def _detect_retirement_intent(message: str) -> bool:
     )
 
 
+def _should_switch_to_retirement_planning(message: str, session: ChatSession) -> bool:
+    """Whether to enter Panda retirement_planning from growth/post_analysis."""
+    if not _detect_retirement_intent(message):
+        return False
+    if _is_in_retirement_flow(session):
+        return False
+    # Explicit retirement request (e.g. "work on my retirement portfolio") wins over a stale
+    # "growth portfolio" line appended from the growth intake narrative in the same message.
+    if _RETIREMENT_INTENT_RE.search(message):
+        return True
+    if _GROWTH_INTENT_RE.search(message):
+        return False
+    return True
+
+
 def _detect_finance_refinement_followup(message: str) -> bool:
     """True when a post-analysis message should route to Quala/Panda for finance Q&A, not only explicit 'refine' regex."""
     if not message or not isinstance(message, str):
@@ -2947,15 +2997,17 @@ def run_message(
     # "Refining before choice": When user is shown 3 options (choosing/retirement_choosing) but hasn't
     # picked one. Any non-choice message = refinement (no need to explicitly say "refine" or click refine).
 
-    # Explicit switch to retirement: only when user is NOT already in retirement flow
-    # and NOT explicitly asking for growth (e.g. "I want to build a growth portfolio for retirement")
-    if (
-        _detect_retirement_intent(message)
-        and not _is_in_retirement_flow(session)
-        and not _GROWTH_INTENT_RE.search(message)
-    ):
+    # Explicit switch to retirement (Panda). Growth phrases in the same blob must not block
+    # when the user also says e.g. "Yes, let's work on my retirement portfolio."
+    switched_to_retirement = False
+    if _should_switch_to_retirement_planning(message, session):
         session.phase = "retirement_planning"
-        logger.info("User requested retirement portfolio -> phase set to retirement_planning (overriding %s)", current_phase)
+        session.parsed_portfolios = None
+        switched_to_retirement = True
+        logger.info(
+            "User requested retirement portfolio -> phase set to retirement_planning (overriding %s)",
+            current_phase,
+        )
 
     elif current_phase in ("portfolio_building", "choosing", "refining"):
         # In portfolio_building, only explicit choices (1/2/3, "option 2", "Go with the moderate portfolio")
@@ -3039,8 +3091,10 @@ def run_message(
         elif current_phase == "retirement_planning" and user_turns >= 2:
             session.phase = "retirement_choosing"
 
-    elif current_phase in ("analyst_running", "post_analysis") and (
-            _detect_refine(message) or _detect_finance_refinement_followup(message)
+    elif (
+        not switched_to_retirement
+        and current_phase in ("analyst_running", "post_analysis")
+        and (_detect_refine(message) or _detect_finance_refinement_followup(message))
     ):
         # Route to agent that created the portfolio: Panda (retirement) or Quala (growth)
         agent = _refinement_agent(session)
@@ -3185,8 +3239,7 @@ def run_message(
             # Check and fetch missing
             for t in tickers:
                 load_ticker = resolve_load_ticker(t)
-                path = DATA_OUTPUT_DIR / f"{load_ticker.lower()}_monthly.csv"
-                if not path.exists():
+                if not monthly_csv_exists(DATA_OUTPUT_DIR, load_ticker):
                     _fetch_ticker_data(load_ticker)
             if session.chosen_retirement_composition:
                 # Retirement portfolio: run retirement MC (Panda -> Analyst Emu)
@@ -3199,7 +3252,7 @@ def run_message(
                 )
             else:
                 # Growth portfolio: run growth backtest
-                if not (DATA_OUTPUT_DIR / "spy_monthly.csv").exists():
+                if not monthly_csv_exists(DATA_OUTPUT_DIR, "SPY"):
                     _fetch_ticker_data("SPY")
                 acc_pre: Dict[str, Any] = {"tickers": dict(session.chosen_composition)}
                 if getattr(session, "chosen_sectors", None):

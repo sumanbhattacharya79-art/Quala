@@ -1,14 +1,19 @@
 import argparse
+import logging
 import sys
 from pathlib import Path
 
 import pandas as pd
 import requests
 
+logger = logging.getLogger(__name__)
+
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
+from alphavantage_apikey import load_alphavantage_api_key
 from alphavantage_merge_utils import atomic_write_csv, merge_dividend_rows
+from list_data_output_tickers import refresh_tickers_list_after_fetch
 
 # Alpha Vantage DIVIDENDS endpoint columns
 EXPECTED_COLS = [
@@ -18,15 +23,6 @@ EXPECTED_COLS = [
     "payment_date",
     "amount",
 ]
-
-
-def _load_apikey(default_key: str) -> str:
-    key_path = Path(__file__).resolve().parents[1] / "alphavantage_apikey.txt"
-    if key_path.exists():
-        key = key_path.read_text().strip()
-        if key:
-            return key
-    return default_key
 
 
 def _empty_dividend_frame() -> pd.DataFrame:
@@ -84,12 +80,13 @@ def _parse_dividends_response(data: dict, symbol: str) -> pd.DataFrame:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
     parser = argparse.ArgumentParser(
         description="Fetch Alpha Vantage historical dividend data."
     )
     parser.add_argument(
         "--apikey",
-        default=_load_apikey("3VTYJRVCL6BTS18C"),
+        default=load_alphavantage_api_key("3VTYJRVCL6BTS18C"),
         help="Alpha Vantage API key.",
     )
     parser.add_argument(
@@ -114,24 +111,56 @@ def main() -> None:
         "https://www.alphavantage.co/query"
         f"?function=DIVIDENDS&symbol={symbol}&apikey={args.apikey}"
     )
-    response = requests.get(url, timeout=30, verify=not args.insecure)
-    response.raise_for_status()
-    data = response.json()
+    try:
+        response = requests.get(url, timeout=30, verify=not args.insecure)
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException as exc:
+        logger.error(
+            "dividend history not found: symbol=%s (HTTP/request error: %s)", symbol, exc
+        )
+        df = _empty_dividend_frame()
+        output_path = (
+            Path(__file__).resolve().parents[1]
+            / "data_output"
+            / f"{symbol}_dividend.csv"
+        )
+        df.to_csv(output_path, index=False)
+        print(f"Wrote {len(df)} rows to {output_path}")
+        refresh_tickers_list_after_fetch(
+            output_path.parent,
+            log=logger,
+            gcs_upload_relative=(output_path.name,),
+        )
+        sys.exit(0)
 
-    df = _parse_dividends_response(data, symbol=symbol)
+    try:
+        df = _parse_dividends_response(data, symbol=symbol)
+    except ValueError as exc:
+        logger.error("dividend history not found: symbol=%s detail=%s", symbol, exc)
+        df = _empty_dividend_frame()
 
     output_path = (
         Path(__file__).resolve().parents[1]
         / "data_output"
         / f"{symbol}_dividend.csv"
     )
-    if args.append:
-        merged = merge_dividend_rows(output_path, df)
-        atomic_write_csv(merged, output_path, index=False)
-        print(f"Merged to {len(merged)} rows at {output_path}")
-    else:
-        df.to_csv(output_path, index=False)
-        print(f"Wrote {len(df)} rows to {output_path}")
+    try:
+        if args.append:
+            merged = merge_dividend_rows(output_path, df)
+            atomic_write_csv(merged, output_path, index=False)
+            print(f"Merged to {len(merged)} rows at {output_path}")
+        else:
+            df.to_csv(output_path, index=False)
+            print(f"Wrote {len(df)} rows to {output_path}")
+        refresh_tickers_list_after_fetch(
+            output_path.parent,
+            log=logger,
+            gcs_upload_relative=(output_path.name,),
+        )
+    except Exception as exc:
+        logger.error("dividend history not saved: symbol=%s (%s)", symbol, exc)
+        sys.exit(0)
 
 
 if __name__ == "__main__":

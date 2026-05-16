@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from backtesting.backtesting_service.types import IntakeContext, retirement_expense_inflation_years
 from backtesting.driver import resolve_load_ticker
+from backtesting.price_data_paths import monthly_csv_exists
 
 from backend.alphavantage_sector_bridge import get_preferred_portfolio_sector_weights
 from backend.db import get_portfolio
@@ -832,10 +833,9 @@ def run_backtest_for_saved_portfolio(
         else:
             for t in portfolio_weights:
                 load_ticker = resolve_load_ticker(t)
-                path = DATA_OUTPUT_DIR / f"{load_ticker.lower()}_monthly.csv"
-                if not path.exists():
+                if not monthly_csv_exists(DATA_OUTPUT_DIR, load_ticker):
                     _fetch_ticker_data(load_ticker)
-            if not (DATA_OUTPUT_DIR / "spy_monthly.csv").exists():
+            if not monthly_csv_exists(DATA_OUTPUT_DIR, "SPY"):
                 _fetch_ticker_data("SPY")
             if intake_ctx is not None:
                 set_intake_context(portfolio_id, intake_ctx)
