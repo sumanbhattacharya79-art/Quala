@@ -6296,6 +6296,20 @@ export default function App() {
               )}
               {!portfolioViewLoading && portfolioViewData?.artifacts && (
                 <div style={{ marginTop: 16 }}>
+                  {compareBacktestArtifactsReady(portfolioViewData.artifacts) ? (
+                    <p
+                      style={{
+                        fontSize: 12,
+                        color: "var(--text-muted)",
+                        margin: "0 0 12px",
+                        lineHeight: 1.55,
+                        maxWidth: 720,
+                      }}
+                    >
+                      Tap <strong style={{ color: "var(--text)" }}>Copy</strong> on any chart or table to copy a PNG
+                      for social posts (paste from clipboard, or save on mobile).
+                    </p>
+                  ) : null}
                   <ChartContainer artifacts={portfolioViewData.artifacts} theme={theme} />
                   {artifactsHaveInlineCharts(portfolioViewData.artifacts) ? (
                     <AdvisorModelOutputDisclaimer className="page-output-disclaimer" />

@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { renderInlineCharts } from "./charts.js";
+import { compareBacktestArtifactsReady } from "./compareGrowthRetireBridge.js";
+import { decorateLifePlannerChartsForSharing } from "./copyChartImage.js";
 
 export function ChartContainer({
   artifacts,
@@ -9,6 +11,8 @@ export function ChartContainer({
   afterCorrelation = null,
   /** When this changes (e.g. light ⟷ dark), charts re-run so D3 fills and inline table styles match the theme. */
   theme = "dark",
+  /** Add per-chart "Copy" controls for clipboard / social sharing (portfolio, scenario, chat). */
+  enableShareCopy = true,
 }) {
   const containerRef = useRef(null);
   const afterCorrSlotRef = useRef(null);
@@ -65,6 +69,13 @@ export function ChartContainer({
     }
     afterCorrRootRef.current.render(afterCorrelation);
   }, [afterCorrelation, wantAfterCorrelation]);
+
+  const chartsReady = artifacts && compareBacktestArtifactsReady(artifacts);
+
+  useEffect(() => {
+    if (!enableShareCopy || !chartsReady || !containerRef.current) return undefined;
+    return decorateLifePlannerChartsForSharing(containerRef.current, { enabled: true });
+  }, [enableShareCopy, chartsReady, artifacts, fullWidth, chartsBeforeNarrative, wantAfterCorrelation, theme]);
 
   if (!artifacts) return null;
   const hasCharts =
