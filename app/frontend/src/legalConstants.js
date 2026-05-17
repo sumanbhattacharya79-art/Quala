@@ -2,6 +2,4 @@
 export const QUALA_TNC_VERSION = "quala-clickwrap-v1";
 
 export const LEGAL_FOOTER_DISCLAIMER =
-  "Disclaimer: Quala.ai is a financial scenario-modeling tool and does not provide investment, tax, or legal advice. " +
-  "All AI-generated recommendations are hypothetical, based on third-party data, and are not a guarantee of future results. " +
-  "No trades are executed on this platform; all investment decisions and executions are the sole responsibility of the user.";
+  "Quala.ai offers hypothetical scenario models, not financial advice. Users assume full responsibility for all investment decisions and external trade execution.";

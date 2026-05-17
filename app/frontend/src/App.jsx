@@ -3901,12 +3901,12 @@ export default function App() {
         .main-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
         .legal-sticky-footer {
           flex-shrink: 0;
-          font-size: 10px;
-          line-height: 1.45;
+          font-size: 9px;
+          line-height: 1.2;
           color: var(--text-muted);
-          padding: 8px 18px 10px;
+          padding: 4px 14px 5px;
           border-top: 1px solid var(--border-soft);
-          background: rgba(10, 10, 10, 0.82);
+          background: rgba(10, 10, 10, 0.88);
           text-align: center;
         }
         [data-theme="light"] .legal-sticky-footer {
@@ -4038,6 +4038,13 @@ export default function App() {
           flex-shrink: 0;
           border-top: 1px solid var(--border-top);
           background: var(--app-bg);
+        }
+        .refine-input-bar.refine-input-bar--inline {
+          padding: 4px 0 8px;
+          border-top: none;
+          background: transparent;
+          max-width: 72%;
+          align-self: flex-start;
         }
         .refine-input-inner {
           display: flex;
@@ -5912,11 +5919,49 @@ export default function App() {
                 </div>
               </div>
             )}
+            {refineChatOpen && !choiceButtons && (
+              <div className="refine-input-bar refine-input-bar--inline" role="region" aria-label="Refine portfolio">
+                <div className="refine-input-inner">
+                  <textarea
+                    ref={refineChatTextareaRef}
+                    className="refine-chat-textarea"
+                    placeholder={
+                      refineChatAdvisor === "Panda"
+                        ? "Type refinements (e.g. add JEPI=15%, more bonds)…"
+                        : "Type refinements (e.g. add QQQ=30%, add GLD)…"
+                    }
+                    value={refineChatInput}
+                    onChange={(e) => {
+                      setRefineChatInput(e.target.value);
+                      e.target.style.height = "auto";
+                      e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+                    }}
+                    onKeyDown={handleRefineChatKey}
+                    rows={2}
+                    disabled={isTyping}
+                  />
+                  <button
+                    type="button"
+                    className="refine-send-btn"
+                    onClick={handleRefineChatSend}
+                    disabled={!refineChatInput.trim() || isTyping}
+                    title="Send (Enter)"
+                    aria-label="Send refinement"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <line x1="22" y1="2" x2="11" y2="13" />
+                      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="refine-input-hint">ENTER to send · SHIFT+ENTER for new line</div>
+              </div>
+            )}
             <div ref={bottomRef} />
           </div>
           )}
 
-          {(view === "intake" || view === "welcomeOptions" || view === "loggedInOptions") && (
+          {(view === "intake" || view === "welcomeOptions" || view === "loggedInOptions") && !refineChatOpen && (
             <div className="form-panel below-messages">
               {view === "loggedInOptions" && (
                 <>
@@ -6316,46 +6361,6 @@ export default function App() {
           )}
           </div>
           )}
-
-          {refineChatOpen && view === "chat" && !choiceButtons && (
-            <div className="refine-input-bar" role="region" aria-label="Refine portfolio">
-              <div className="refine-input-inner">
-                <textarea
-                  ref={refineChatTextareaRef}
-                  className="refine-chat-textarea"
-                  placeholder={
-                    refineChatAdvisor === "Panda"
-                      ? "Describe how to refine your retirement portfolios (e.g. add JEPI=15%, more bonds)…"
-                      : "Describe how to refine your growth portfolios (e.g. add QQQ=30%, add GLD)…"
-                  }
-                  value={refineChatInput}
-                  onChange={(e) => {
-                    setRefineChatInput(e.target.value);
-                    e.target.style.height = "auto";
-                    e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
-                  }}
-                  onKeyDown={handleRefineChatKey}
-                  rows={1}
-                  disabled={isTyping}
-                />
-                <button
-                  type="button"
-                  className="refine-send-btn"
-                  onClick={handleRefineChatSend}
-                  disabled={!refineChatInput.trim() || isTyping}
-                  title="Send (Enter)"
-                  aria-label="Send refinement"
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <line x1="22" y1="2" x2="11" y2="13" />
-                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                  </svg>
-                </button>
-              </div>
-              <div className="refine-input-hint">ENTER to send · SHIFT+ENTER for new line</div>
-            </div>
-          )}
-
           <LegalStickyFooter />
           </div>
         </main>
