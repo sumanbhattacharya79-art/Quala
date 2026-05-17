@@ -29,6 +29,13 @@ function appendMoneyManagerUserId(payload, explicitUserId) {
 }
 
 const THEME_STORAGE_KEY = "portfolio-optimizer-theme";
+/** Breakpoint for mobile drawer, compact topbar, and chat layout (see mobile-view.md). */
+const MOBILE_MAX_WIDTH_PX = 768;
+
+function readIsMobileViewport() {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH_PX}px)`).matches;
+}
 const COMPARE_SBS_KEY_PREFIX = "portfolio-optimizer:compare-sbs:";
 const COMPARE_CONNECT_KEY_PREFIX = "portfolio-optimizer:compare-connect:";
 function compareSbsStorageKey(uid) {
@@ -1151,7 +1158,9 @@ export default function App() {
   const [sessionId, syncSessionFromResponse, startNewSession] = useSessionId();
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
   const [isTyping, setIsTyping] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(readIsMobileViewport);
+  const [sidebarOpen, setSidebarOpen] = useState(() => !readIsMobileViewport());
+  const [topbarMenuOpen, setTopbarMenuOpen] = useState(false);
   const [theme, setTheme] = useState(() =>
     typeof localStorage !== "undefined" && localStorage.getItem(THEME_STORAGE_KEY) === "light" ? "light" : "dark",
   );
@@ -1357,6 +1366,36 @@ export default function App() {
   useEffect(() => {
     setIntakeFormError(null);
   }, [formState]);
+
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH_PX}px)`);
+    const onChange = () => {
+      const mobile = mq.matches;
+      setIsMobile(mobile);
+      if (mobile) {
+        setSidebarOpen(false);
+      } else {
+        setSidebarOpen(true);
+        setTopbarMenuOpen(false);
+      }
+    };
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  const prevViewForSidebarRef = useRef(view);
+  useEffect(() => {
+    if (isMobile && prevViewForSidebarRef.current !== view) {
+      setSidebarOpen(false);
+    }
+    prevViewForSidebarRef.current = view;
+  }, [view, isMobile]);
+
+  const toggleSidebar = useCallback(() => {
+    setTopbarMenuOpen(false);
+    setSidebarOpen((open) => !open);
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -3682,16 +3721,18 @@ export default function App() {
           --surface-elevated: #ffffff;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'DM Mono', monospace; background: var(--app-bg); color: var(--text); height: 100vh; overflow: hidden; }
+        body { font-family: 'DM Mono', monospace; background: var(--app-bg); color: var(--text); height: 100vh; height: 100dvh; overflow: hidden; }
         @keyframes typingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-6px); opacity: 1; } }
         @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
-        .app-shell { display: flex; height: 100vh; background: var(--app-bg); }
+        .app-shell { display: flex; height: 100vh; height: 100dvh; background: var(--app-bg); }
         .sidebar {
           width: 260px;
           min-width: 260px;
           height: 100vh;
+          height: 100dvh;
           max-height: 100vh;
+          max-height: 100dvh;
           background: var(--sidebar-bg);
           border-right: 1px solid var(--border);
           display: flex;
@@ -4024,7 +4065,7 @@ export default function App() {
         .message-row.error .message-avatar { background: #eb575718; border: 1px solid #eb575730; color: #eb5757; }
         .message-sender { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--section); }
         .message-time { font-size: 9px; color: var(--msg-time); }
-        .message-bubble { max-width: 68%; padding: 14px 18px; border-radius: 4px; font-size: 13px; line-height: 1.7; white-space: pre-line; }
+        .message-bubble { max-width: var(--assistant-content-max-width, 68%); padding: 14px 18px; border-radius: 4px; font-size: 13px; line-height: 1.7; white-space: pre-line; }
         .message-row.assistant .message-bubble { background: var(--surface); border: 1px solid var(--border-soft); border-top-left-radius: 1px; color: var(--bubble-assistant-text); }
         .message-row.user .message-bubble { background: #c8a96e12; border: 1px solid #c8a96e25; border-top-right-radius: 1px; color: var(--text); }
         .typing-bubble { background: var(--surface); border: 1px solid var(--border-soft); padding: 12px 18px; border-radius: 4px; border-top-left-radius: 1px; animation: fadeSlideIn 0.3s ease forwards; }
@@ -4039,12 +4080,19 @@ export default function App() {
           border-top: 1px solid var(--border-top);
           background: var(--app-bg);
         }
+        .refine-message-row { align-items: flex-start; width: 100%; }
         .refine-input-bar.refine-input-bar--inline {
           padding: 4px 0 8px;
           border-top: none;
           background: transparent;
-          max-width: 72%;
+          width: var(--assistant-content-max-width, 68%);
+          max-width: var(--assistant-content-max-width, 68%);
           align-self: flex-start;
+          box-sizing: border-box;
+        }
+        .refine-input-bar.refine-input-bar--inline .refine-input-inner {
+          width: 100%;
+          box-sizing: border-box;
         }
         .refine-input-inner {
           display: flex;
@@ -4406,9 +4454,141 @@ export default function App() {
         .portfolio-view-panel .intake-row-cmd-btn--add {
           color: #5c4d2c;
         }
+        .sidebar-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 199;
+          margin: 0;
+          padding: 0;
+          border: none;
+          background: rgba(0, 0, 0, 0.52);
+          cursor: pointer;
+        }
+        .topbar-menu-wrap { display: none; position: relative; }
+        .topbar-menu-btn {
+          background: transparent;
+          border: 1px solid var(--toggle-border);
+          border-radius: 3px;
+          color: var(--text-muted);
+          padding: 6px 10px;
+          font-size: 11px;
+          font-family: 'DM Mono', monospace;
+          cursor: pointer;
+          letter-spacing: 0.05em;
+        }
+        .topbar-menu-btn:hover { border-color: #c8a96e60; color: #c8a96e; }
+        .topbar-menu-dropdown {
+          position: absolute;
+          top: calc(100% + 6px);
+          right: 0;
+          min-width: 160px;
+          background: var(--modal-bg);
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          padding: 6px;
+          z-index: 120;
+          box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+        }
+        .topbar-menu-dropdown button {
+          display: block;
+          width: 100%;
+          text-align: left;
+          background: none;
+          border: none;
+          padding: 10px 12px;
+          font-family: 'DM Mono', monospace;
+          font-size: 11px;
+          color: var(--text-soft);
+          cursor: pointer;
+          border-radius: 3px;
+        }
+        .topbar-menu-dropdown button:hover {
+          background: var(--fn-hover-bg);
+          color: #c8a96e;
+        }
+        @media (max-width: 768px) {
+          .app-shell { width: 100%; }
+          .main { width: 100%; flex: 1; min-width: 0; }
+          .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            z-index: 200;
+            width: min(280px, 85vw);
+            min-width: 0;
+            padding-top: max(28px, env(safe-area-inset-top));
+            padding-bottom: max(28px, env(safe-area-inset-bottom));
+            padding-left: max(20px, env(safe-area-inset-left));
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            box-shadow: 4px 0 28px rgba(0, 0, 0, 0.4);
+          }
+          .sidebar.collapsed {
+            width: min(280px, 85vw);
+            min-width: 0;
+            padding: 28px 20px;
+            padding-top: max(28px, env(safe-area-inset-top));
+            padding-bottom: max(28px, env(safe-area-inset-bottom));
+            padding-left: max(20px, env(safe-area-inset-left));
+            overflow-y: auto;
+            transform: translateX(-105%);
+          }
+          .sidebar:not(.collapsed) {
+            transform: translateX(0);
+          }
+          .topbar {
+            padding: 12px 14px;
+            padding-top: max(12px, env(safe-area-inset-top));
+            gap: 8px;
+          }
+          .topbar-sub { display: none; }
+          .topbar-nav--desktop { display: none !important; }
+          .topbar-menu-wrap { display: block; }
+          .user-email-display { display: none; }
+          .user-menu .logout-btn { display: none; }
+          .topbar-right > .login-btn { display: none; }
+          .topbar-right > .user-menu { display: none; }
+          .topbar-left { min-width: 0; flex: 1; }
+          .topbar-title { font-size: 16px; }
+          .topbar-right { gap: 8px; }
+          .messages-area { padding: 16px; }
+          :root { --assistant-content-max-width: 92%; }
+          .message-bubble { max-width: var(--assistant-content-max-width); }
+          .advisor-model-output-disclaimer { max-width: var(--assistant-content-max-width); }
+          .choice-buttons {
+            flex-direction: column;
+            width: var(--assistant-content-max-width);
+            max-width: 100%;
+          }
+          .choice-btn {
+            width: 100%;
+            min-height: 44px;
+            font-size: 12px;
+          }
+          .refine-input-bar.refine-input-bar--inline {
+            width: var(--assistant-content-max-width);
+            max-width: var(--assistant-content-max-width);
+          }
+          .refine-chat-textarea { font-size: 16px; }
+          .refine-send-btn { width: 44px; height: 44px; }
+          .legal-sticky-footer {
+            padding-bottom: max(5px, env(safe-area-inset-bottom));
+            padding-left: max(14px, env(safe-area-inset-left));
+            padding-right: max(14px, env(safe-area-inset-right));
+            font-size: 8px;
+          }
+        }
       `}</style>
 
-      <div className="app-shell">
+      <div className={`app-shell${isMobile ? " is-mobile" : ""}`}>
+        {isMobile && sidebarOpen ? (
+          <button
+            type="button"
+            className="sidebar-backdrop"
+            aria-label="Close menu"
+            onClick={() => setSidebarOpen(false)}
+          />
+        ) : null}
         <aside className={`sidebar${sidebarOpen ? "" : " collapsed"}`}>
           <div className="user-block">
             <div className="user-block__top">
@@ -4625,7 +4805,14 @@ export default function App() {
         <main className="main">
           <div className="topbar">
             <div className="topbar-left">
-              <button className="toggle-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>{sidebarOpen ? "←" : "→"}</button>
+              <button
+                type="button"
+                className="toggle-btn"
+                onClick={toggleSidebar}
+                aria-label={sidebarOpen ? "Close menu" : "Open menu"}
+              >
+                {isMobile ? (sidebarOpen ? "✕" : "☰") : sidebarOpen ? "←" : "→"}
+              </button>
               <div>
                 <div className="topbar-title">Quala AI</div>
                 <div className="topbar-sub">Plan your financial future, just a conversation away.</div>
@@ -4641,7 +4828,7 @@ export default function App() {
               >
                 {theme === "dark" ? "Light" : "Dark"}
               </button>
-              <nav className="topbar-nav" aria-label="Site pages">
+              <nav className="topbar-nav topbar-nav--desktop" aria-label="Site pages">
                 <button type="button" className="topbar-nav-link" onClick={() => setInfoModal("about")}>
                   About us
                 </button>
@@ -4652,6 +4839,75 @@ export default function App() {
                   Pricing
                 </button>
               </nav>
+              <div className="topbar-menu-wrap">
+                <button
+                  type="button"
+                  className="topbar-menu-btn"
+                  aria-expanded={topbarMenuOpen}
+                  aria-haspopup="true"
+                  onClick={() => setTopbarMenuOpen((open) => !open)}
+                >
+                  Menu
+                </button>
+                {topbarMenuOpen ? (
+                  <div className="topbar-menu-dropdown" role="menu">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setInfoModal("about");
+                        setTopbarMenuOpen(false);
+                      }}
+                    >
+                      About us
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setInfoModal("faq");
+                        setTopbarMenuOpen(false);
+                      }}
+                    >
+                      FAQ
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setInfoModal("pricing");
+                        setTopbarMenuOpen(false);
+                      }}
+                    >
+                      Pricing
+                    </button>
+                    {userId ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          handleLogout();
+                          setTopbarMenuOpen(false);
+                        }}
+                      >
+                        Logout
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setAccountModalTab("login");
+                          setAccountModalOpen(true);
+                          setTopbarMenuOpen(false);
+                        }}
+                      >
+                        Login
+                      </button>
+                    )}
+                  </div>
+                ) : null}
+              </div>
               {userId ? (
                 <div className="user-menu">
                   <span className="user-email-display">{userEmail || "Signed in"}</span>
@@ -5920,6 +6176,7 @@ export default function App() {
               </div>
             )}
             {refineChatOpen && !choiceButtons && (
+              <div className="message-row assistant refine-message-row">
               <div className="refine-input-bar refine-input-bar--inline" role="region" aria-label="Refine portfolio">
                 <div className="refine-input-inner">
                   <textarea
@@ -5955,6 +6212,7 @@ export default function App() {
                   </button>
                 </div>
                 <div className="refine-input-hint">ENTER to send · SHIFT+ENTER for new line</div>
+              </div>
               </div>
             )}
             <div ref={bottomRef} />
