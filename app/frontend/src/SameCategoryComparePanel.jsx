@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { CompareIntakeDiffPanel } from "./CompareIntakeDiffPanel.jsx";
 import { ComparePortfolioColumnHeader, titleFromSel } from "./ComparePortfolioColumnHeader.jsx";
+import { CompareDropZone } from "./CompareDropZone.jsx";
 import { renderComparePairedCharts } from "./charts.js";
 import { AdvisorModelOutputDisclaimer } from "./advisorDisclaimer.jsx";
 
@@ -20,6 +21,10 @@ export function SameCategoryComparePanel({
   rightArtifacts,
   continueLoading,
   onDrop,
+  onPick,
+  savedPortfolios = [],
+  savedScenarios = [],
+  excludeScenarioIds = new Set(),
   onClearSide,
   onContinue,
   theme = "dark",
@@ -43,6 +48,28 @@ export function SameCategoryComparePanel({
   const kindLabel = resolvedKind === "retirement" ? "retirement" : resolvedKind === "growth" ? "growth" : null;
   const showDiff = intakeLeft && intakeRight && !hydrating;
 
+  const emptyDragHint = useMemo(() => {
+    if (kindLabel) {
+      return (
+        <>
+          <span className="compare-drop-zone-placeholder-primary">
+            Use the menu above to pick a <strong style={{ color: "#c8a96e" }}>{kindLabel}</strong> item.
+          </span>
+          <span className="compare-drop-zone-placeholder-drag">On desktop, drag from the sidebar.</span>
+        </>
+      );
+    }
+    return (
+      <>
+        <span className="compare-drop-zone-placeholder-primary">
+          Pick a <strong style={{ color: "#c8a96e" }}>growth</strong> or{" "}
+          <strong style={{ color: "#c8a96e" }}>retirement</strong> item — both sides must match.
+        </span>
+        <span className="compare-drop-zone-placeholder-drag">On desktop, drag from the sidebar.</span>
+      </>
+    );
+  }, [kindLabel]);
+
   return (
     <div className="messages-area compare-messages-area" style={{ padding: "20px 28px", width: "100%", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
@@ -52,9 +79,9 @@ export function SameCategoryComparePanel({
         <span className="topbar-title">Compare (same type)</span>
         <span className="compare-page-subhint">
           Line up <strong style={{ color: "#c8a96e" }}>two growth</strong> or{" "}
-          <strong style={{ color: "#c8a96e" }}>two retirement</strong> portfolios or saved scenarios—the left and right
-          columns must match (growth + growth or retirement + retirement, not mixed). Review intake differences, then use{" "}
-          <strong style={{ color: "#c8a96e" }}>Continue</strong> to run both backtests and refresh the paired charts.
+          <strong style={{ color: "#c8a96e" }}>two retirement</strong> portfolios or saved scenarios—choose from the menus
+          or drag on desktop. Both columns must match (growth + growth or retirement + retirement). Review intake
+          differences, then use <strong style={{ color: "#c8a96e" }}>Continue</strong> to run both backtests.
         </span>
       </div>
 
@@ -67,63 +94,32 @@ export function SameCategoryComparePanel({
       <div className="compare-page-scroll">
         <div className="compare-page-inner">
           <div className="compare-drop-zones-row">
-            {["left", "right"].map((side) => {
-              const isLeft = side === "left";
-              const sel = isLeft ? leftSel : rightSel;
-              return (
-                <div key={side} className="compare-drop-zone-col" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div
-                    role="region"
-                    aria-label={isLeft ? "Drop zone left" : "Drop zone right"}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = "copy";
-                    }}
-                    onDragEnter={(e) => {
-                      e.preventDefault();
-                      e.currentTarget.classList.add("compare-page-drop-active");
-                    }}
-                    onDragLeave={(e) => {
-                      if (!e.currentTarget.contains(e.relatedTarget)) {
-                        e.currentTarget.classList.remove("compare-page-drop-active");
-                      }
-                    }}
-                    onDrop={(e) => onDrop(side, e)}
-                    className="compare-drop-zone-panel"
-                  >
-                    {sel ? (
-                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
-                        <div>
-                          <div className="compare-drop-zone-title">{sel.label}</div>
-                          <div className="compare-drop-zone-meta">
-                            {sel.kind}
-                            {sel.source === "scenario" ? " · Scenario" : " · Portfolio"}
-                          </div>
-                        </div>
-                        <button type="button" className="login-cancel-btn" style={{ fontSize: 11, padding: "6px 12px" }} onClick={() => onClearSide(side)}>
-                          Clear
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="compare-drop-zone-placeholder">
-                        {kindLabel ? (
-                          <>
-                            Drop a <strong style={{ color: "#c8a96e" }}>{kindLabel}</strong> portfolio or scenario here (
-                            {isLeft ? "left" : "right"} column). Both sides must stay {kindLabel}.
-                          </>
-                        ) : (
-                          <>
-                            Drop a <strong style={{ color: "#c8a96e" }}>growth</strong> or{" "}
-                            <strong style={{ color: "#c8a96e" }}>retirement</strong> portfolio or scenario here (
-                            {isLeft ? "left" : "right"}). Use two growth or two retirement—same type on both sides.
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            <CompareDropZone
+              side="left"
+              columnLabel="Left"
+              requiredKind={resolvedKind}
+              sel={leftSel}
+              savedPortfolios={savedPortfolios}
+              savedScenarios={savedScenarios}
+              excludeScenarioIds={excludeScenarioIds}
+              onDrop={onDrop}
+              onPick={(payload) => onPick("left", payload)}
+              onClear={onClearSide}
+              emptyDragHint={emptyDragHint}
+            />
+            <CompareDropZone
+              side="right"
+              columnLabel="Right"
+              requiredKind={resolvedKind}
+              sel={rightSel}
+              savedPortfolios={savedPortfolios}
+              savedScenarios={savedScenarios}
+              excludeScenarioIds={excludeScenarioIds}
+              onDrop={onDrop}
+              onPick={(payload) => onPick("right", payload)}
+              onClear={onClearSide}
+              emptyDragHint={emptyDragHint}
+            />
           </div>
           {hydrating ? <div className="compare-drop-zone-loading">Loading intake…</div> : null}
         </div>

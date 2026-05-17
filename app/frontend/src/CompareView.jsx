@@ -9,6 +9,7 @@ import {
 } from "./compareGrowthRetireBridge.js";
 import { LifePlannerDials, LifePlannerSingleDial } from "./LifePlannerDials.jsx";
 import { ShareableSnapshot } from "./ShareableSnapshot.jsx";
+import { CompareDropZone } from "./CompareDropZone.jsx";
 import { decorateLifePlannerChartsForSharing } from "./copyChartImage.js";
 import { BigSpendingUpcomingEditor } from "./BigSpendingUpcomingEditor.jsx";
 import { ComparePortfolioColumnHeader } from "./ComparePortfolioColumnHeader.jsx";
@@ -605,6 +606,10 @@ export function CompareView({
   retireRunLoading,
   retireSyncMessage,
   handleCompareDrop,
+  onComparePick,
+  savedPortfolios = [],
+  savedScenarios = [],
+  excludeScenarioIds = new Set(),
   onClearSide,
   onLifePlannerContinue,
   intakeHints,
@@ -727,7 +732,7 @@ export function CompareView({
         </p>
       ) : (
         <span className="compare-page-subhint" style={{ display: "block", marginBottom: 16 }}>
-          Drag one <strong style={{ color: "#c8a96e" }}>growth</strong> item on the left and one <strong style={{ color: "#c8a96e" }}>retirement</strong> item on the right. Intake is <strong style={{ color: "#c8a96e" }}>not editable</strong> here — change assumptions only by clearing or dropping different items. Each <strong style={{ color: "#c8a96e" }}>Continue</strong> runs growth Monte Carlo, sets retirement <strong style={{ color: "#c8a96e" }}>initial portfolio at retirement</strong> from the growth median (P50) at the horizon, and runs the retirement backtest. Save once under <strong style={{ color: "#c8a96e" }}>Life scenario</strong> to store both sides under one name in the sidebar.
+          Choose or drag one <strong style={{ color: "#c8a96e" }}>growth</strong> item on the left and one <strong style={{ color: "#c8a96e" }}>retirement</strong> item on the right (use the menus on phone). Intake is <strong style={{ color: "#c8a96e" }}>not editable</strong> here — change assumptions only by clearing or picking different items. Each <strong style={{ color: "#c8a96e" }}>Continue</strong> runs growth Monte Carlo, sets retirement <strong style={{ color: "#c8a96e" }}>initial portfolio at retirement</strong> from the growth median (P50) at the horizon, and runs the retirement backtest. Save once under <strong style={{ color: "#c8a96e" }}>Life scenario</strong> to store both sides under one name in the sidebar.
         </span>
       )}
       {showGoalPanel ? (
@@ -876,58 +881,32 @@ export function CompareView({
         <div className="compare-page-inner">
           {intakeFrozen ? null : (
             <div className="compare-drop-zones-row">
-              {["left", "right"].map((side) => {
-                const isLeft = side === "left";
-                const sel = isLeft ? compareLeftSel : compareRightSel;
-                const label = isLeft ? "Growth" : "Retirement";
-                return (
-                  <div key={side} className="compare-drop-zone-col" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    <div
-                      role="region"
-                      aria-label={isLeft ? "Drop zone growth" : "Drop zone retirement"}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = "copy";
-                      }}
-                      onDragEnter={(e) => {
-                        e.preventDefault();
-                        e.currentTarget.classList.add("compare-page-drop-active");
-                      }}
-                      onDragLeave={(e) => {
-                        if (!e.currentTarget.contains(e.relatedTarget)) {
-                          e.currentTarget.classList.remove("compare-page-drop-active");
-                        }
-                      }}
-                      onDrop={(e) => handleCompareDrop(side, e)}
-                      className="compare-drop-zone-panel"
-                    >
-                      {sel ? (
-                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
-                          <div>
-                            <div className="compare-drop-zone-title">{sel.label}</div>
-                            <div className="compare-drop-zone-meta">
-                              {label}
-                              {sel.source === "scenario" ? " · Scenario" : " · Portfolio"}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="login-cancel-btn"
-                            style={{ fontSize: 11, padding: "6px 12px" }}
-                            onClick={() => onClearSide(side)}
-                          >
-                            Clear
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="compare-drop-zone-placeholder">
-                          Drop a <strong style={{ color: "#c8a96e" }}>{isLeft ? "growth" : "retirement"}</strong> portfolio or scenario here.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              <CompareDropZone
+                side="left"
+                columnLabel="Growth"
+                requiredKind="growth"
+                sel={compareLeftSel}
+                savedPortfolios={savedPortfolios}
+                savedScenarios={savedScenarios}
+                excludeScenarioIds={excludeScenarioIds}
+                disabled={intakeFrozen}
+                onDrop={handleCompareDrop}
+                onPick={(payload) => onComparePick("left", payload)}
+                onClear={onClearSide}
+              />
+              <CompareDropZone
+                side="right"
+                columnLabel="Retirement"
+                requiredKind="retirement"
+                sel={compareRightSel}
+                savedPortfolios={savedPortfolios}
+                savedScenarios={savedScenarios}
+                excludeScenarioIds={excludeScenarioIds}
+                disabled={intakeFrozen}
+                onDrop={handleCompareDrop}
+                onPick={(payload) => onComparePick("right", payload)}
+                onClear={onClearSide}
+              />
             </div>
           )}
           {compareHydrating ? <div className="compare-drop-zone-loading">Loading saved intake…</div> : null}

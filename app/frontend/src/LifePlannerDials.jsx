@@ -145,14 +145,15 @@ export function LifePlannerDials({
       className={className}
       style={{
         display: "flex",
-        flexWrap: compact ? "nowrap" : "wrap",
+        flexWrap: "wrap",
         gap: compact ? 6 : 28,
-        justifyContent: compact ? "flex-start" : "center",
+        justifyContent: compact ? "center" : "center",
         alignItems: "flex-start",
         marginTop: compact ? 0 : 14,
         paddingTop: compact ? 0 : 14,
         borderTop: showTopBorder ? "1px solid var(--border-soft)" : "none",
-        maxWidth: compact ? 200 : "none",
+        maxWidth: compact ? "100%" : "none",
+        width: compact ? "100%" : undefined,
         boxSizing: "border-box",
       }}
     >

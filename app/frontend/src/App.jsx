@@ -70,6 +70,11 @@ function readPersistedConnect(uid) {
 import { ChartContainer } from "./ChartContainer";
 import { PortfolioValueHistoryChart } from "./PortfolioValueHistoryChart.jsx";
 import { CompareView } from "./CompareView.jsx";
+import {
+  compareSelFromDragPayload,
+  validateLifePlannerPick,
+  validateSameCategoryPick,
+} from "./comparePortfolioPick.js";
 import { SameCategoryComparePanel } from "./SameCategoryComparePanel.jsx";
 import { BigSpendingUpcomingEditor } from "./BigSpendingUpcomingEditor.jsx";
 import {
@@ -2467,45 +2472,42 @@ export default function App() {
     [userId, runPortfolioBacktestWithFormSnapshot, handleArtifacts],
   );
 
+  const applyCompareSelection = useCallback(
+    (side, payload) => {
+      if (connectLifePlannerFrozen) return;
+      const notice = validateLifePlannerPick(side, payload);
+      if (notice) {
+        setCompareNotice(notice);
+        return;
+      }
+      const sel = compareSelFromDragPayload(payload);
+      if (!sel) return;
+      setCompareNotice(null);
+      setCompareRetireSyncMessage(null);
+      setConnectPairScenarioError(null);
+      setConnectPairScenarioSuccess(null);
+      setSelectedLifeScenarioId(null);
+      connectPlannerIntakesRef.current = { g: null, r: null };
+      compareConnectBacktestTokenRef.current += 1;
+      if (side === "left") setCompareLeftSel(sel);
+      else setCompareRightSel(sel);
+    },
+    [connectLifePlannerFrozen],
+  );
+
   const handleCompareDrop = useCallback(
     (side, e) => {
       e.preventDefault();
       e.currentTarget.classList.remove("compare-page-drop-active");
-      if (connectLifePlannerFrozen) return;
-      setCompareNotice(null);
-      setCompareRetireSyncMessage(null);
       let payload;
       try {
         payload = JSON.parse(e.dataTransfer.getData("application/json") || "{}");
       } catch {
         return;
       }
-      if (!payload.portfolioId || (payload.kind !== "growth" && payload.kind !== "retirement")) return;
-      if (side === "left" && payload.kind !== "growth") {
-        setCompareNotice("Left panel is for growth portfolios or scenarios only.");
-        return;
-      }
-      if (side === "right" && payload.kind !== "retirement") {
-        setCompareNotice("Right panel is for retirement portfolios or scenarios only.");
-        return;
-      }
-      setConnectPairScenarioError(null);
-      setConnectPairScenarioSuccess(null);
-      setSelectedLifeScenarioId(null);
-      connectPlannerIntakesRef.current = { g: null, r: null };
-      const rawSid = payload.scenarioId ?? payload.scenario_id ?? null;
-      const sel = {
-        kind: payload.kind,
-        source: payload.source === "scenario" || (rawSid != null && String(rawSid).trim() !== "") ? "scenario" : "portfolio",
-        portfolioId: payload.portfolioId,
-        scenarioId: rawSid != null && String(rawSid).trim() !== "" ? String(rawSid).trim() : null,
-        label: payload.label || "Item",
-      };
-      compareConnectBacktestTokenRef.current += 1;
-      if (side === "left") setCompareLeftSel(sel);
-      else setCompareRightSel(sel);
+      applyCompareSelection(side, payload);
     },
-    [connectLifePlannerFrozen],
+    [applyCompareSelection],
   );
 
   const loadFormFromCompareSel = useCallback(async (item) => {
@@ -2530,43 +2532,36 @@ export default function App() {
     return portfolioRow.intake && typeof portfolioRow.intake === "object" ? portfolioRow.intake : {};
   }, []);
 
+  const applySbsSelection = useCallback(
+    (side, payload) => {
+      const notice = validateSameCategoryPick(side, payload, sbsLeftSel, sbsRightSel);
+      if (notice) {
+        setSbsNotice(notice);
+        return;
+      }
+      const sel = compareSelFromDragPayload(payload);
+      if (!sel) return;
+      setSbsNotice(null);
+      sbsBacktestTokenRef.current += 1;
+      if (side === "left") setSbsLeftSel(sel);
+      else setSbsRightSel(sel);
+    },
+    [sbsLeftSel, sbsRightSel],
+  );
+
   const handleSbsDrop = useCallback(
     (side, e) => {
       e.preventDefault();
       e.currentTarget.classList.remove("compare-page-drop-active");
-      setSbsNotice(null);
       let payload;
       try {
         payload = JSON.parse(e.dataTransfer.getData("application/json") || "{}");
       } catch {
         return;
       }
-      if (!payload.portfolioId || (payload.kind !== "growth" && payload.kind !== "retirement")) return;
-      const rawSidSbs = payload.scenarioId ?? payload.scenario_id ?? null;
-      const sel = {
-        kind: payload.kind,
-        source: payload.source === "scenario" || (rawSidSbs != null && String(rawSidSbs).trim() !== "") ? "scenario" : "portfolio",
-        portfolioId: payload.portfolioId,
-        scenarioId: rawSidSbs != null && String(rawSidSbs).trim() !== "" ? String(rawSidSbs).trim() : null,
-        label: payload.label || "Item",
-      };
-      if (side === "left") {
-        if (sbsRightSel && sbsRightSel.kind !== sel.kind) {
-          setSbsNotice(`Right is ${sbsRightSel.kind}; drop a ${sbsRightSel.kind} item on the left.`);
-          return;
-        }
-        sbsBacktestTokenRef.current += 1;
-        setSbsLeftSel(sel);
-      } else {
-        if (sbsLeftSel && sbsLeftSel.kind !== sel.kind) {
-          setSbsNotice(`Left is ${sbsLeftSel.kind}; drop a ${sbsLeftSel.kind} item on the right.`);
-          return;
-        }
-        sbsBacktestTokenRef.current += 1;
-        setSbsRightSel(sel);
-      }
+      applySbsSelection(side, payload);
     },
-    [sbsLeftSel, sbsRightSel],
+    [applySbsSelection],
   );
 
   /** Load saved intake into editable forms (no backtest) when both sides are set. */
@@ -3871,11 +3866,22 @@ export default function App() {
           --surface-elevated: #ffffff;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'DM Mono', monospace; background: var(--app-bg); color: var(--text); height: 100vh; height: 100dvh; overflow: hidden; }
+        html, body, #root { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
+        #root { min-height: 100dvh; display: flex; flex-direction: column; }
+        body { font-family: 'DM Mono', monospace; background: var(--app-bg); color: var(--text); height: 100vh; height: 100dvh; overflow: hidden; width: 100%; }
         @keyframes typingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-6px); opacity: 1; } }
         @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
-        .app-shell { display: flex; height: 100vh; height: 100dvh; background: var(--app-bg); }
+        .app-shell {
+          display: flex;
+          height: 100vh;
+          height: 100dvh;
+          width: 100%;
+          max-width: 100%;
+          overflow-x: clip;
+          background: var(--app-bg);
+        }
+        .app-shell.is-mobile { overflow-x: clip; }
         .sidebar {
           width: 260px;
           min-width: 260px;
@@ -4088,8 +4094,27 @@ export default function App() {
         .sidebar-total-value { font-family: 'Cormorant Garamond', serif; font-size: 24px; font-weight: 500; color: #c8a96e; }
         .new-session-btn { margin-top: 10px; width: 100%; padding: 8px 12px; font-size: 11px; letter-spacing: 0.05em; background: var(--border-soft); border: 1px solid #c8a96e40; border-radius: 3px; color: #c8a96e; cursor: pointer; }
         .new-session-btn:hover { background: var(--fn-hover-bg); border-color: #c8a96e60; }
-        .main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--app-bg); position: relative; }
-        .main-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+        .main {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+          min-height: 0;
+          width: 100%;
+          max-width: 100%;
+          background: var(--app-bg);
+          position: relative;
+          overflow-x: clip;
+        }
+        .main-body {
+          flex: 1;
+          min-height: 0;
+          min-width: 0;
+          max-width: 100%;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
         .legal-sticky-footer {
           flex-shrink: 0;
           font-size: 9px;
@@ -4119,13 +4144,36 @@ export default function App() {
         .page-output-disclaimer { max-width: 100% !important; width: 100%; }
         .analyze-advisor-disclaimer { max-width: 100%; }
         .mr-brown-advisor-disclaimer { max-width: 100%; }
-        .chat-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+        .chat-scroll {
+          flex: 1;
+          min-height: 0;
+          min-width: 0;
+          max-width: 100%;
+          overflow-x: clip;
+          overflow-y: auto;
+          display: flex;
+          flex-direction: column;
+        }
         .chat-scroll::-webkit-scrollbar { width: 6px; }
         .chat-scroll::-webkit-scrollbar-track { background: var(--scroll-track); }
         .chat-scroll::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 3px; }
         .chat-scroll::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
-        .topbar { display: flex; align-items: center; justify-content: space-between; padding: 18px 28px; border-bottom: 1px solid var(--border-top); background: var(--app-bg); flex-shrink: 0; }
-        .topbar-left { display: flex; align-items: center; gap: 14px; }
+        .topbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 18px 28px;
+          border-bottom: 1px solid var(--border-top);
+          background: var(--app-bg);
+          flex-shrink: 0;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          overflow-x: clip;
+          gap: 8px;
+        }
+        .topbar-left { display: flex; align-items: center; gap: 14px; min-width: 0; flex: 1 1 auto; }
+        .topbar-left > div { min-width: 0; overflow: hidden; }
         .topbar-right { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: flex-end; }
         .topbar-nav { display: flex; align-items: center; gap: 6px 16px; flex-wrap: wrap; }
         .topbar-nav-link { background: none; border: none; padding: 4px 0; font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-muted); cursor: pointer; transition: color 0.2s; }
@@ -4202,7 +4250,17 @@ export default function App() {
         .ticker-name { font-size: 9px; letter-spacing: 0.1em; color: var(--section); text-transform: uppercase; }
         .ticker-val { font-size: 12px; font-weight: 500; font-family: 'Cormorant Garamond', serif; }
         .ticker-val.pos { color: #6fcf97; } .ticker-val.neg { color: #eb5757; }
-        .messages-area { padding: 28px; display: flex; flex-direction: column; gap: 24px; flex-shrink: 0; }
+        .messages-area {
+          padding: 28px;
+          display: flex;
+          flex-direction: column;
+          gap: 24px;
+          flex-shrink: 0;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          overflow-x: clip;
+        }
         .messages-area.with-form-below { padding-bottom: 12px; }
         .message-row { display: flex; flex-direction: column; animation: fadeSlideIn 0.3s ease forwards; }
         .message-row.user { align-items: flex-end; } .message-row.assistant { align-items: flex-start; }
@@ -4215,7 +4273,16 @@ export default function App() {
         .message-row.error .message-avatar { background: #eb575718; border: 1px solid #eb575730; color: #eb5757; }
         .message-sender { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--section); }
         .message-time { font-size: 9px; color: var(--msg-time); }
-        .message-bubble { max-width: var(--assistant-content-max-width, 68%); padding: 14px 18px; border-radius: 4px; font-size: 13px; line-height: 1.7; white-space: pre-line; }
+        .message-bubble {
+          max-width: var(--assistant-content-max-width, 68%);
+          padding: 14px 18px;
+          border-radius: 4px;
+          font-size: 13px;
+          line-height: 1.7;
+          white-space: pre-line;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
         .message-row.assistant .message-bubble { background: var(--surface); border: 1px solid var(--border-soft); border-top-left-radius: 1px; color: var(--bubble-assistant-text); }
         .message-row.user .message-bubble { background: #c8a96e12; border: 1px solid #c8a96e25; border-top-right-radius: 1px; color: var(--text); }
         .typing-bubble { background: var(--surface); border: 1px solid var(--border-soft); padding: 12px 18px; border-radius: 4px; border-top-left-radius: 1px; animation: fadeSlideIn 0.3s ease forwards; }
@@ -4313,7 +4380,13 @@ export default function App() {
           overflow-wrap: break-word;
           word-break: break-word;
         }
-        .form-panel { padding: 20px 28px; max-width: 520px; }
+        .form-panel {
+          padding: 20px 28px;
+          max-width: 520px;
+          width: 100%;
+          box-sizing: border-box;
+          overflow-x: clip;
+        }
         .sidebar-life-planner-dials {
           margin: 0 10px 14px;
           padding: 8px 6px 10px;
@@ -4657,8 +4730,12 @@ export default function App() {
           color: #c8a96e;
         }
         @media (max-width: 768px) {
-          .app-shell { width: 100%; }
-          .main { width: 100%; flex: 1; min-width: 0; }
+          .app-shell { width: 100%; max-width: 100%; }
+          .main { width: 100%; flex: 1; min-width: 0; max-width: 100%; }
+          .app-shell.is-mobile .sidebar {
+            flex: 0 0 0;
+            width: min(280px, 85vw);
+          }
           .sidebar {
             position: fixed;
             top: 0;
@@ -4738,6 +4815,20 @@ export default function App() {
           }
           .form-panel .birth-date-group {
             width: 100%;
+            min-width: 0;
+            flex: 1 1 100%;
+          }
+          .form-panel label > div[style*="flex"] {
+            flex-direction: column !important;
+            align-items: stretch !important;
+          }
+          .form-panel label > div[style*="flex"] > span {
+            min-width: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+          }
+          .form-panel .save-portfolio-actions {
+            flex-wrap: wrap;
           }
           .retirement-status-btn {
             min-height: 44px;
@@ -4918,7 +5009,7 @@ export default function App() {
                               onClick={() => handlePortfolioClick(p.portfolio_id)}
                               onKeyDown={(e) => e.key === "Enter" && handlePortfolioClick(p.portfolio_id)}
                               style={{ cursor: "pointer" }}
-                              title="Click to open · Drag to Compare"
+                              title="Click to open · Drag or pick in Life planner / Compare"
                             >
                               <span className="portfolio-list-item-label">{p.portfolio_name || "My Portfolio"}</span>
                               {portfolioUsd != null ? (
@@ -4967,7 +5058,7 @@ export default function App() {
                                     }
                                   }}
                                   style={{ cursor: "pointer", fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}
-                                  title="Click to open · Drag to Compare"
+                                  title="Click to open · Drag or pick in Life planner / Compare"
                                 >
                                   <span className="portfolio-list-item-label">{scenarioListLabel}</span>
                                 </div>
@@ -5251,6 +5342,10 @@ export default function App() {
                 retireRunLoading={compareRetireRunLoading}
                 retireSyncMessage={compareRetireSyncMessage}
                 handleCompareDrop={handleCompareDrop}
+                onComparePick={applyCompareSelection}
+                savedPortfolios={savedPortfolios}
+                savedScenarios={savedScenarios}
+                excludeScenarioIds={lifePlannerOwnedScenarioIds}
                 onLifePlannerContinue={handleCompareLifePlannerContinue}
                 intakeHints={{ monthly: WHATIF_MONTHLY_ROW_FIELDS_HINT, inflow: WHATIF_ONE_TIME_INFLOW_HINT }}
                 connectLifeScenarioNameInput={connectLifeScenarioNameInput}
@@ -5309,6 +5404,10 @@ export default function App() {
                 rightArtifacts={sbsArtRight}
                 continueLoading={sbsLeftLoading || sbsRightLoading}
                 onDrop={handleSbsDrop}
+                onPick={applySbsSelection}
+                savedPortfolios={savedPortfolios}
+                savedScenarios={savedScenarios}
+                excludeScenarioIds={lifePlannerOwnedScenarioIds}
                 onContinue={handleSbsContinue}
                 theme={theme}
                 onBack={() => {
