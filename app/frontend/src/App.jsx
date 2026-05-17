@@ -5,6 +5,7 @@ import {
   putJson,
   getJson,
   deleteJson,
+  fetchPersistedBacktestArtifacts,
   resolveApiUrl,
   SESSION_KEY,
   USER_ID_KEY,
@@ -1201,6 +1202,8 @@ export default function App() {
   const [selectedPortfolioRow, setSelectedPortfolioRow] = useState(null);
   const [portfolioViewData, setPortfolioViewData] = useState(null); // { portfolio, artifacts, agent }
   const [portfolioViewLoading, setPortfolioViewLoading] = useState(false);
+  /** idle | fetch (GET saved portfolio) | backtest (POST /backtest — full MC recompute) */
+  const [portfolioViewLoadingPhase, setPortfolioViewLoadingPhase] = useState("idle");
   const [showPortfolioDeleteConfirm, setShowPortfolioDeleteConfirm] = useState(false);
   /** Expand ticker/weight table to update saved portfolio composition (not scenarios). */
   const [showPortfolioUpdateComposition, setShowPortfolioUpdateComposition] = useState(false);
@@ -2046,18 +2049,27 @@ export default function App() {
 
   /** Run MC/backtest for a saved portfolio using an explicit form snapshot (avoids stale React state after load). */
   const runPortfolioBacktestWithFormSnapshot = useCallback(
-    async (portfolioId, formSnapshot, loadToken, usePortfolioMarkForInitial = true) => {
+    async (portfolioId, formSnapshot, loadToken, usePortfolioMarkForInitial = true, scenarioId = null) => {
       const uid = userId ?? localStorage.getItem(USER_ID_KEY);
       if (!uid || !portfolioId) return;
       setPortfolioViewLoading(true);
+      setPortfolioViewLoadingPhase("backtest");
       setPortfolioViewData(null);
+      const sid = scenarioId ? String(scenarioId).trim() : "";
+      console.info(
+        "[portfolio] POST /backtest — recomputing MC",
+        portfolioId,
+        sid ? `scenario_id=${sid}` : "portfolio-level",
+      );
       try {
         const intake = buildIntakeFromFormState(formSnapshot);
-        const res = await postJson(`/api/portfolio/saved/${encodeURIComponent(portfolioId)}/backtest`, {
+        const body = {
           user_id: uid,
           intake,
           use_portfolio_mark_for_initial: usePortfolioMarkForInitial,
-        });
+        };
+        if (sid) body.scenario_id = sid;
+        const res = await postJson(`/api/portfolio/saved/${encodeURIComponent(portfolioId)}/backtest`, body);
         if (loadToken !== undefined && loadToken !== portfolioViewLoadTokenRef.current) {
           return;
         }
@@ -2086,6 +2098,7 @@ export default function App() {
       } finally {
         if (loadToken === undefined || loadToken === portfolioViewLoadTokenRef.current) {
           setPortfolioViewLoading(false);
+          setPortfolioViewLoadingPhase("idle");
         }
       }
     },
@@ -2097,9 +2110,10 @@ export default function App() {
     const tok = portfolioViewLoadTokenRef.current;
     // Latest form values (avoids stale closure if a field updated in the same frame as Submit).
     const snapshot = formStateRef.current;
+    const sid = selectedScenarioId ? String(selectedScenarioId).trim() : null;
     // Honor edited intake (e.g. initial investment + what-if rows); do not replace initial_value with live portfolio_value.
-    await runPortfolioBacktestWithFormSnapshot(selectedPortfolioId, snapshot, tok, false);
-  }, [selectedPortfolioId, runPortfolioBacktestWithFormSnapshot]);
+    await runPortfolioBacktestWithFormSnapshot(selectedPortfolioId, snapshot, tok, false, sid);
+  }, [selectedPortfolioId, selectedScenarioId, runPortfolioBacktestWithFormSnapshot]);
 
   const openNetWorthView = useCallback(() => {
     portfolioViewLoadTokenRef.current += 1;
@@ -2206,7 +2220,7 @@ export default function App() {
       const reqId = ++openLifeScenarioRequestIdRef.current;
       try {
         const row = await getJson(
-          `/api/life-scenario/${encodeURIComponent(lifeScenarioId)}?user_id=${encodeURIComponent(uid)}&_=${Date.now()}`,
+          `/api/life-scenario/${encodeURIComponent(lifeScenarioId)}?user_id=${encodeURIComponent(uid)}&include_backtest=true&_=${Date.now()}`,
         );
         if (reqId !== openLifeScenarioRequestIdRef.current) return;
         const g = row.growth;
@@ -2224,8 +2238,14 @@ export default function App() {
         compareConnectBacktestTokenRef.current += 1;
         connectChartsHydrateInFlightRef.current = false;
         connectChartsHydrateAttemptsRef.current = { lifeId: null, count: 0 };
-        setCompareGrowthArtifacts(null);
-        setCompareRetireArtifacts(null);
+        const gArt = row.growth_backtest_artifacts;
+        const rArt = row.retirement_backtest_artifacts;
+        setCompareGrowthArtifacts(
+          gArt && compareBacktestArtifactsReady(gArt) ? gArt : null,
+        );
+        setCompareRetireArtifacts(
+          rArt && compareBacktestArtifactsReady(rArt) ? rArt : null,
+        );
         const lifeNm = String(row.name || "").trim();
         setCompareLeftSel({
           kind: "growth",
@@ -2272,13 +2292,16 @@ export default function App() {
       setPortfolioSaveAsName("");
       setSelectedPortfolioRow(null);
       setPortfolioViewData(null);
-      setPortfolioViewLoading(false);
+      setPortfolioViewLoading(true);
+      setPortfolioViewLoadingPhase("fetch");
       setShowPortfolioDeleteConfirm(false);
       setShowPortfolioUpdateComposition(false);
       setFormState({ ...defaultFormState });
       setView("portfolio");
       try {
-        const row = await getJson(`/api/portfolio/saved/${encodeURIComponent(portfolioId)}`);
+        const row = await getJson(
+          `/api/portfolio/saved/${encodeURIComponent(portfolioId)}?refresh_mtm=true&include_backtest=true&scenario_id=`,
+        );
         if (loadToken !== portfolioViewLoadTokenRef.current) {
           return;
         }
@@ -2306,7 +2329,32 @@ export default function App() {
           setUserFilledIntakeForm(true);
           setProfileSaved(false);
         }
-        await runPortfolioBacktestWithFormSnapshot(portfolioId, formForBacktest, loadToken);
+        const persistedArt = row.backtest_artifacts;
+        const loadSource = row.backtest_load_source;
+        const cat = (row.portfolio_category || "growth").toLowerCase();
+        if (persistedArt && compareBacktestArtifactsReady(persistedArt)) {
+          console.info(
+            "[portfolio] Charts from Supabase snapshot",
+            portfolioId,
+            loadSource,
+            row.backtest_persisted_at ?? "",
+          );
+          setPortfolioViewLoading(false);
+          setPortfolioViewLoadingPhase("idle");
+          setPortfolioViewData({
+            portfolio: row,
+            artifacts: persistedArt,
+            agent: cat === "retirement" ? "Emu" : "Ana",
+          });
+          handleArtifacts({ artifacts: persistedArt });
+        } else {
+          console.warn(
+            "[portfolio] No valid persisted snapshot — will POST /backtest",
+            portfolioId,
+            { loadSource, hasArtifacts: !!persistedArt },
+          );
+          await runPortfolioBacktestWithFormSnapshot(portfolioId, formForBacktest, loadToken);
+        }
         fetchSavedPortfolios(uid);
       } catch (err) {
         if (loadToken !== portfolioViewLoadTokenRef.current) {
@@ -2314,9 +2362,11 @@ export default function App() {
         }
         addMessage("error", err.message || "Could not load portfolio");
         setView("loggedInOptions");
+        setPortfolioViewLoading(false);
+        setPortfolioViewLoadingPhase("idle");
       }
     },
-    [userId, runPortfolioBacktestWithFormSnapshot, fetchSavedPortfolios],
+    [userId, runPortfolioBacktestWithFormSnapshot, fetchSavedPortfolios, handleArtifacts],
   );
 
   const getIntakeFromForm = () => {
@@ -2342,14 +2392,20 @@ export default function App() {
       setView("portfolio");
       try {
         const [scenarioRow, portfolioRow] = await Promise.all([
-          getJson(`/api/scenario/${encodeURIComponent(scenarioId)}`),
-          getJson(`/api/portfolio/saved/${encodeURIComponent(portfolioId)}`),
+          getJson(`/api/scenario/${encodeURIComponent(scenarioId)}?include_backtest=true`),
+          getJson(
+            `/api/portfolio/saved/${encodeURIComponent(portfolioId)}?refresh_mtm=false&include_backtest=false`,
+          ),
         ]);
         if (loadToken !== portfolioViewLoadTokenRef.current) {
           return;
         }
         setSelectedPortfolioRow(portfolioRow);
         setSelectedScenarioRow(scenarioRow);
+        portfolioValuationCacheRef.current = {
+          history: Array.isArray(portfolioRow.valuation_history) ? portfolioRow.valuation_history : [],
+          asOf: portfolioRow.valuation_as_of ?? null,
+        };
         const intake = scenarioRow.intake && typeof scenarioRow.intake === "object" ? scenarioRow.intake : null;
         const next = formStateFromIntakeApi(intake);
         const formForBacktest = next ?? { ...defaultFormState };
@@ -2358,7 +2414,31 @@ export default function App() {
           localStorage.setItem(FORM_STATE_KEY, JSON.stringify(formStateWithoutWhatIf(next)));
           setUserFilledIntakeForm(true);
         }
-        await runPortfolioBacktestWithFormSnapshot(portfolioId, formForBacktest, loadToken);
+        const persistedArt = scenarioRow.backtest_artifacts;
+        const cat = (portfolioRow.portfolio_category || "growth").toLowerCase();
+        if (persistedArt && compareBacktestArtifactsReady(persistedArt)) {
+          console.info(
+            "[scenario] Charts from Supabase snapshot",
+            scenarioId,
+            scenarioRow.backtest_load_source,
+          );
+          setPortfolioViewLoading(false);
+          setPortfolioViewLoadingPhase("idle");
+          setPortfolioViewData({
+            portfolio: portfolioRow,
+            artifacts: persistedArt,
+            agent: cat === "retirement" ? "Emu" : "Ana",
+          });
+          handleArtifacts({ artifacts: persistedArt });
+        } else {
+          await runPortfolioBacktestWithFormSnapshot(
+            portfolioId,
+            formForBacktest,
+            loadToken,
+            false,
+            scenarioId,
+          );
+        }
       } catch (err) {
         if (loadToken !== portfolioViewLoadTokenRef.current) {
           return;
@@ -2370,7 +2450,7 @@ export default function App() {
         }
       }
     },
-    [userId, runPortfolioBacktestWithFormSnapshot],
+    [userId, runPortfolioBacktestWithFormSnapshot, handleArtifacts],
   );
 
   const handleCompareDrop = useCallback(
@@ -2492,8 +2572,14 @@ export default function App() {
       const uid = userId ?? localStorage.getItem(USER_ID_KEY);
       if (!uid) return;
       setCompareHydrating(true);
-      setCompareGrowthArtifacts(null);
-      setCompareRetireArtifacts(null);
+      const keepFrozenArtifacts =
+        connectLifePlannerFrozen &&
+        compareBacktestArtifactsReady(compareGrowthArtifacts) &&
+        compareBacktestArtifactsReady(compareRetireArtifacts);
+      if (!keepFrozenArtifacts) {
+        setCompareGrowthArtifacts(null);
+        setCompareRetireArtifacts(null);
+      }
       setCompareRetireSyncMessage(null);
       try {
         const [gLoaded, rLoaded] = await Promise.all([
@@ -2517,6 +2603,16 @@ export default function App() {
           setCompareGrowthForm(gForm);
           setCompareRetireForm(rForm);
         }
+        if (!cancelled && !connectLifePlannerFrozen && compareLeftSel?.portfolioId && compareRightSel?.portfolioId) {
+          const [gArt, rArt] = await Promise.all([
+            fetchPersistedBacktestArtifacts(compareLeftSel.portfolioId, uid),
+            fetchPersistedBacktestArtifacts(compareRightSel.portfolioId, uid),
+          ]);
+          if (!cancelled) {
+            if (gArt && compareBacktestArtifactsReady(gArt)) setCompareGrowthArtifacts(gArt);
+            if (rArt && compareBacktestArtifactsReady(rArt)) setCompareRetireArtifacts(rArt);
+          }
+        }
       } catch (err) {
         if (!cancelled) {
           addMessage("error", err.message || "Could not load compare items");
@@ -2530,7 +2626,17 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [view, compareLeftSel, compareRightSel, userId, loadFormFromCompareSel, connectLifePlannerFrozen, selectedLifeScenarioId]);
+  }, [
+    view,
+    compareLeftSel,
+    compareRightSel,
+    userId,
+    loadFormFromCompareSel,
+    connectLifePlannerFrozen,
+    selectedLifeScenarioId,
+    compareGrowthArtifacts,
+    compareRetireArtifacts,
+  ]);
 
   /** Saved life plan (frozen): column titles use portfolio/scenario name without "{life} — " prefix. */
   useEffect(() => {
@@ -2843,8 +2949,19 @@ export default function App() {
           await fetchSavedPortfolios(uid, true);
           resetOpenPlannerLanding();
         } else {
-          const frozenMedian = extractGrowthTerminalValueP50(compareGrowthArtifacts);
-          const retireDialPct = extractRetirementSuccessPercentForDial(compareRetireArtifacts);
+          let seq = null;
+          if (
+            !compareBacktestArtifactsReady(compareGrowthArtifacts) ||
+            !compareBacktestArtifactsReady(compareRetireArtifacts)
+          ) {
+            seq = await runLifePlannerSequentialBacktests();
+          }
+          const frozenMedian = extractGrowthTerminalValueP50(
+            seq?.growthArtifacts ?? compareGrowthArtifacts,
+          );
+          const retireDialPct = extractRetirementSuccessPercentForDial(
+            seq?.retireArtifacts ?? compareRetireArtifacts,
+          );
           const res = await postJson("/api/life-scenario/save", {
             user_id: uid,
             name: lifeName,
@@ -3391,7 +3508,9 @@ export default function App() {
         intake,
       });
       await fetchSavedScenarios(uid);
-      const refreshed = await getJson(`/api/scenario/${encodeURIComponent(selectedScenarioId)}`);
+      const refreshed = await getJson(
+        `/api/scenario/${encodeURIComponent(selectedScenarioId)}?include_backtest=true`,
+      );
       if (refreshed && typeof refreshed === "object") {
         setSelectedScenarioRow(refreshed);
       }
@@ -6073,7 +6192,11 @@ export default function App() {
                   {portfolioWhatIfMode && (
                     <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #1e1e1e" }}>
                       <button type="submit" className="form-primary-btn" disabled={portfolioViewLoading}>
-                        {portfolioViewLoading ? "Running backtest…" : "Continue"}
+                        {portfolioViewLoadingPhase === "backtest"
+                          ? "Running backtest…"
+                          : portfolioViewLoading
+                            ? "Loading…"
+                            : "Continue"}
                       </button>
                     </div>
                   )}
@@ -6142,7 +6265,11 @@ export default function App() {
               {portfolioViewLoading && (
                 <div style={{ padding: 24, color: "#888", display: "flex", alignItems: "center", gap: 12 }}>
                   <TypingDots />
-                  <span>Running backtest…</span>
+                  <span>
+                    {portfolioViewLoadingPhase === "backtest"
+                      ? "Running backtest…"
+                      : "Loading saved portfolio…"}
+                  </span>
                 </div>
               )}
               {!portfolioViewLoading && portfolioViewData?.artifacts && (

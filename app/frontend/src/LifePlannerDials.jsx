@@ -91,6 +91,45 @@ function SemiDial({ valuePct, label, accent, valueColor, emptyLabel, compact }) 
  *   className?: string,
  * }} props
  */
+/** Single gauge for per-chart social sharing. */
+export function LifePlannerSingleDial({
+  kind,
+  goalFundedPercent,
+  retirementSuccessPercent,
+  goalLabel = "Funded",
+  retirementLabel = "Success",
+  compact = false,
+  className,
+}) {
+  const { arc, value } = accentPairFromRetirementSuccess(retirementSuccessPercent);
+  if (kind === "goal") {
+    return (
+      <div className={className}>
+      <SemiDial
+        valuePct={goalFundedPercent}
+        label={goalLabel}
+        accent={arc}
+        valueColor={value}
+        emptyLabel="—"
+        compact={compact}
+      />
+      </div>
+    );
+  }
+  return (
+    <div className={className}>
+      <SemiDial
+      valuePct={retirementSuccessPercent}
+      label={retirementLabel}
+      accent={arc}
+      valueColor={value}
+      emptyLabel="—"
+      compact={compact}
+    />
+    </div>
+  );
+}
+
 export function LifePlannerDials({
   goalFundedPercent,
   retirementSuccessPercent,

@@ -910,3 +910,109 @@
   outline: 2px solid rgba(139, 115, 72, 0.65);
   outline-offset: 2px;
 }
+
+/* Life planner: copy chart/gauge as PNG for social sharing */
+.share-copyable {
+  position: relative;
+}
+.share-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 4;
+  min-height: 36px;
+  min-width: 56px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text, #fff);
+  background: rgba(20, 20, 20, 0.88);
+  border: 1px solid var(--border-soft, #333);
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.share-copy-btn:hover:not(:disabled) {
+  background: rgba(40, 40, 40, 0.95);
+}
+.share-copy-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+[data-theme="light"] .share-copy-btn {
+  color: #1a1a1a;
+  background: rgba(255, 252, 247, 0.92);
+  border-color: #d6d3d1;
+}
+.share-copy-btn--toolbar {
+  position: static;
+  min-height: 40px;
+}
+.share-snapshot {
+  margin-bottom: 8px;
+}
+.life-planner-dial-share {
+  flex: 1 1 200px;
+  max-width: 280px;
+  min-width: 0;
+}
+.life-planner-dials-share-row .share-snapshot__capture {
+  display: flex;
+  justify-content: center;
+}
+.share-snapshot__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.share-snapshot__status {
+  font-size: 12px;
+  color: var(--text-muted, #a8a29e);
+  line-height: 1.4;
+  max-width: 100%;
+}
+.share-snapshot__capture {
+  padding: 12px 12px 10px;
+  border-radius: 8px;
+  background: var(--bg-elevated, #111);
+  border: 1px solid var(--border-soft, #1e1e1e);
+}
+.share-snapshot__subtitle {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #a8a29e);
+  margin-bottom: 8px;
+}
+.share-snapshot__brand {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft, #2a2a2a);
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-muted, #78716c);
+  text-align: center;
+}
+@media (max-width: 768px) {
+  .share-copy-btn {
+    min-height: 44px;
+    min-width: 64px;
+    font-size: 13px;
+    top: 6px;
+    right: 6px;
+  }
+  .backtest-result-header.share-copyable .share-copy-btn {
+    position: relative;
+    top: auto;
+    right: auto;
+    display: block;
+    width: 100%;
+    max-width: 140px;
+    margin: 8px 0 0 auto;
+  }
+}

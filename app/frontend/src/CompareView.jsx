@@ -7,7 +7,9 @@ import {
   extractGrowthTerminalValueP50,
   extractRetirementProbabilityOfSuccess,
 } from "./compareGrowthRetireBridge.js";
-import { LifePlannerDials } from "./LifePlannerDials.jsx";
+import { LifePlannerDials, LifePlannerSingleDial } from "./LifePlannerDials.jsx";
+import { ShareableSnapshot } from "./ShareableSnapshot.jsx";
+import { decorateLifePlannerChartsForSharing } from "./copyChartImage.js";
 import { BigSpendingUpcomingEditor } from "./BigSpendingUpcomingEditor.jsx";
 import { ComparePortfolioColumnHeader } from "./ComparePortfolioColumnHeader.jsx";
 import { MrBrownChat } from "./MrBrownChat.jsx";
@@ -646,6 +648,16 @@ export function CompareView({
     };
   }, [leftArt, rightArt, theme]);
 
+  const chartsReadyForSharing =
+    compareBacktestArtifactsReady(growthArtifacts) && compareBacktestArtifactsReady(retireArtifacts);
+
+  useEffect(() => {
+    if (!intakeFrozen || !chartsReadyForSharing) return undefined;
+    const el = pairedChartsRef.current;
+    if (!el) return undefined;
+    return decorateLifePlannerChartsForSharing(el, { enabled: true });
+  }, [intakeFrozen, chartsReadyForSharing, leftArt, rightArt, theme]);
+
   const showEditors = growthForm && retireForm && !compareHydrating;
   /** Life planner intake columns are never editable here — only drag/drop (and server merge on Continue). */
   const intakeFormsReadOnly = true;
@@ -702,6 +714,12 @@ export function CompareView({
       {intakeFrozen ? (
         <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 16px", lineHeight: 1.55, maxWidth: 720 }}>
           Saved life scenario — charts below reflect your last backtest. Use <strong style={{ color: "var(--text)" }}>Delete</strong> to remove this plan from Life planner.
+          {chartsReadyForSharing ? (
+            <>
+              {" "}
+              Tap <strong style={{ color: "var(--text)" }}>Copy</strong> on any chart or gauge to copy a PNG for Reddit and other social posts (paste from clipboard, or save on mobile).
+            </>
+          ) : null}
         </p>
       ) : (
         <span className="compare-page-subhint" style={{ display: "block", marginBottom: 16 }}>
@@ -765,12 +783,55 @@ export function CompareView({
               >
                 <strong style={{ color: "var(--text)" }}>Goal funded</strong> uses your growth portfolio’s latest value and the median value at retirement from the growth Monte Carlo.
               </p>
-              <LifePlannerDials
-                goalFundedPercent={goalFundedPercent}
-                retirementSuccessPercent={retirementSuccessPercentDial}
-                goalLabel={intakeFrozen ? "Goal saved" : "Funded"}
-                retirementLabel={intakeFrozen ? "Retirement success" : "Success"}
-              />
+              {intakeFrozen && chartsReadyForSharing ? (
+                <div
+                  className="life-planner-dials-share-row"
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 16,
+                    marginTop: 14,
+                    justifyContent: "center",
+                  }}
+                >
+                  <ShareableSnapshot
+                    title="Goal saved"
+                    subtitle="Goal funded"
+                    filename="quala-goal-funded.png"
+                    className="life-planner-dial-share"
+                  >
+                    <LifePlannerSingleDial
+                      kind="goal"
+                      goalFundedPercent={goalFundedPercent}
+                      retirementSuccessPercent={retirementSuccessPercentDial}
+                      goalLabel="Goal saved"
+                      retirementLabel="Retirement success"
+                    />
+                  </ShareableSnapshot>
+                  <ShareableSnapshot
+                    title="Retirement success"
+                    subtitle="Retirement Monte Carlo"
+                    filename="quala-retirement-success.png"
+                    className="life-planner-dial-share"
+                  >
+                    <LifePlannerSingleDial
+                      kind="retirement"
+                      goalFundedPercent={goalFundedPercent}
+                      retirementSuccessPercent={retirementSuccessPercentDial}
+                      goalLabel="Goal saved"
+                      retirementLabel="Retirement success"
+                    />
+                  </ShareableSnapshot>
+                </div>
+              ) : (
+                <LifePlannerDials
+                  goalFundedPercent={goalFundedPercent}
+                  retirementSuccessPercent={retirementSuccessPercentDial}
+                  goalLabel={intakeFrozen ? "Goal saved" : "Funded"}
+                  retirementLabel={intakeFrozen ? "Retirement success" : "Success"}
+                  showTopBorder={false}
+                />
+              )}
             </>
           ) : null}
       </div>

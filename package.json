@@ -11,6 +11,7 @@
   "dependencies": {
     "d3": "^7.8.5",
     "d3-sankey": "^0.12.3",
+    "html-to-image": "^1.11.13",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

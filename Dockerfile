@@ -21,9 +21,12 @@ COPY data_input ./data_input
 COPY data_output ./data_output
 COPY migrations ./migrations
 COPY scripts ./scripts
-COPY run_fetch_alphavantage.sh run_fetch_alphavantage_daily_append_all.sh run_fetch_alphavantage_monthly_append_all.sh ./
+COPY run_fetch_alphavantage.sh run_fetch_alphavantage_daily_append_all.sh run_fetch_alphavantage_monthly_append_all.sh \
+    run_refresh_portfolio_valuations.sh run_refresh_portfolio_backtests.sh ./
 RUN chmod +x run_fetch_alphavantage.sh run_fetch_alphavantage_daily_append_all.sh run_fetch_alphavantage_monthly_append_all.sh \
-    scripts/gcp_marketdata_daily_job.sh scripts/gcp_marketdata_monthly_job.sh
+    run_refresh_portfolio_valuations.sh run_refresh_portfolio_backtests.sh \
+    scripts/gcp_marketdata_daily_job.sh scripts/gcp_marketdata_monthly_job.sh \
+    scripts/gcp_saved_portfolios_daily_job.sh scripts/gcp_saved_portfolios_monthly_job.sh
 
 EXPOSE 8080
 CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

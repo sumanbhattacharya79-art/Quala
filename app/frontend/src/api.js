@@ -69,6 +69,25 @@ export async function deleteJson(url) {
   return res.json().catch(() => ({}));
 }
 
+/** Load persisted backtest/MC JSON for a saved portfolio or scenario (404 → null). */
+export async function fetchPersistedBacktestArtifacts(portfolioId, userId, scenarioId = null) {
+  if (!portfolioId || !userId) return null;
+  const q = new URLSearchParams({ user_id: userId });
+  if (scenarioId) q.set("scenario_id", scenarioId);
+  const url = resolveApiUrl(
+    `/api/portfolio/saved/${encodeURIComponent(portfolioId)}/backtest-artifacts?${q}`,
+  );
+  const res = await fetch(url);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    const msg = typeof detail.detail === "string" ? detail.detail : "Request failed";
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  return data?.artifacts ?? null;
+}
+
 export const SESSION_KEY = "portfolio-optimizer-session";
 export const USER_ID_KEY = "portfolio-optimizer-user-id";
 export const USER_EMAIL_KEY = "portfolio-optimizer-user-email";

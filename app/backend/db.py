@@ -182,6 +182,75 @@ def _ensure_columns(conn: Any) -> None:
         """)
     except sqlite3.OperationalError:
         pass
+    _migrate_portfolio_backtest_snapshots_scenario_id(conn)
+
+
+def _scenario_id_storage_key(scenario_id: Optional[str]) -> str:
+    """Empty string = portfolio-level snapshot; non-empty = saved_scenarios.scenario_id."""
+    return (scenario_id or "").strip()
+
+
+def _migrate_portfolio_backtest_snapshots_scenario_id(conn: sqlite3.Connection) -> None:
+    """SQLite: add scenario_id and composite PK (portfolio_id, scenario_id)."""
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(portfolio_backtest_snapshots)").fetchall()}
+    except sqlite3.OperationalError:
+        return
+    if not cols:
+        return
+    if "scenario_id" not in cols:
+        try:
+            conn.execute(
+                "ALTER TABLE portfolio_backtest_snapshots ADD COLUMN scenario_id TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass
+    pk_cols = [
+        r[1]
+        for r in conn.execute("PRAGMA table_info(portfolio_backtest_snapshots)").fetchall()
+        if r[5]
+    ]
+    if "scenario_id" in pk_cols:
+        return
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_backtest_snapshots_v2 (
+                portfolio_id TEXT NOT NULL,
+                scenario_id TEXT NOT NULL DEFAULT '',
+                user_id TEXT NOT NULL,
+                run_kind TEXT NOT NULL,
+                artifact_json TEXT NOT NULL,
+                summary_metrics_json TEXT,
+                intake_json TEXT,
+                data_date_range TEXT,
+                portfolio_weights_json TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (portfolio_id, scenario_id),
+                FOREIGN KEY (portfolio_id) REFERENCES saved_portfolios(portfolio_id)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO portfolio_backtest_snapshots_v2 (
+                portfolio_id, scenario_id, user_id, run_kind, artifact_json,
+                summary_metrics_json, intake_json, data_date_range, portfolio_weights_json,
+                created_at, updated_at
+            )
+            SELECT
+                portfolio_id, COALESCE(scenario_id, ''), user_id, run_kind, artifact_json,
+                summary_metrics_json, intake_json, data_date_range, portfolio_weights_json,
+                created_at, updated_at
+            FROM portfolio_backtest_snapshots
+        """)
+        conn.execute("DROP TABLE portfolio_backtest_snapshots")
+        conn.execute(
+            "ALTER TABLE portfolio_backtest_snapshots_v2 RENAME TO portfolio_backtest_snapshots"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pbs_user_id ON portfolio_backtest_snapshots(user_id)"
+        )
+    except sqlite3.OperationalError:
+        pass
 
 
 def init_db() -> None:
@@ -350,6 +419,42 @@ def init_db() -> None:
         """)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pvh_portfolio ON portfolio_value_history(portfolio_id)"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_backtest_snapshots (
+                portfolio_id TEXT NOT NULL,
+                scenario_id TEXT NOT NULL DEFAULT '',
+                user_id TEXT NOT NULL,
+                run_kind TEXT NOT NULL,
+                artifact_json TEXT NOT NULL,
+                summary_metrics_json TEXT,
+                intake_json TEXT,
+                data_date_range TEXT,
+                portfolio_weights_json TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (portfolio_id, scenario_id),
+                FOREIGN KEY (portfolio_id) REFERENCES saved_portfolios(portfolio_id)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pbs_user_id ON portfolio_backtest_snapshots(user_id)"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_backtest_monthly_history (
+                portfolio_id TEXT NOT NULL,
+                year_month TEXT NOT NULL,
+                run_kind TEXT NOT NULL,
+                artifact_json TEXT NOT NULL,
+                summary_metrics_json TEXT,
+                data_date_range TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (portfolio_id, year_month),
+                FOREIGN KEY (portfolio_id) REFERENCES saved_portfolios(portfolio_id)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pbmh_portfolio ON portfolio_backtest_monthly_history(portfolio_id)"
         )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS user_gemini_token_usage (
@@ -869,6 +974,196 @@ def get_portfolio_value_history(portfolio_id: str) -> List[Dict[str, Any]]:
                     pass
             out.append(item)
         return out
+
+
+def upsert_portfolio_backtest_snapshot(
+    portfolio_id: str,
+    user_id: str,
+    run_kind: str,
+    artifact_json: str,
+    summary_metrics_json: Optional[str],
+    intake_json: Optional[str],
+    data_date_range: Optional[str],
+    portfolio_weights_json: Optional[str],
+    updated_at: str,
+    scenario_id: Optional[str] = None,
+) -> None:
+    init_db()
+    sid = _scenario_id_storage_key(scenario_id)
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO portfolio_backtest_snapshots (
+                portfolio_id, scenario_id, user_id, run_kind, artifact_json, summary_metrics_json,
+                intake_json, data_date_range, portfolio_weights_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(portfolio_id, scenario_id) DO UPDATE SET
+                user_id = excluded.user_id,
+                run_kind = excluded.run_kind,
+                artifact_json = excluded.artifact_json,
+                summary_metrics_json = excluded.summary_metrics_json,
+                intake_json = excluded.intake_json,
+                data_date_range = excluded.data_date_range,
+                portfolio_weights_json = excluded.portfolio_weights_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                portfolio_id,
+                sid,
+                user_id,
+                run_kind,
+                artifact_json,
+                summary_metrics_json,
+                intake_json,
+                data_date_range,
+                portfolio_weights_json,
+                updated_at,
+                updated_at,
+            ),
+        )
+
+
+def get_portfolio_backtest_snapshot(
+    portfolio_id: str,
+    scenario_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    init_db()
+    sid = _scenario_id_storage_key(scenario_id)
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM portfolio_backtest_snapshots
+            WHERE portfolio_id = ? AND scenario_id = ?
+            """,
+            (portfolio_id, sid),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def copy_portfolio_backtest_snapshot_to_scenario(
+    portfolio_id: str,
+    user_id: str,
+    scenario_id: str,
+    *,
+    from_scenario_id: Optional[str] = None,
+) -> bool:
+    """Copy persisted backtest row to a scenario key (e.g. after Save as scenario)."""
+    src_sid = _scenario_id_storage_key(from_scenario_id)
+    dst_sid = _scenario_id_storage_key(scenario_id)
+    if not dst_sid:
+        return False
+    row = get_portfolio_backtest_snapshot(portfolio_id, src_sid)
+    if not row or row.get("user_id") != user_id:
+        return False
+    upsert_portfolio_backtest_snapshot(
+        portfolio_id,
+        user_id,
+        str(row.get("run_kind") or "growth"),
+        str(row.get("artifact_json") or ""),
+        row.get("summary_metrics_json"),
+        row.get("intake_json"),
+        row.get("data_date_range"),
+        row.get("portfolio_weights_json"),
+        str(row.get("updated_at") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")),
+        scenario_id=dst_sid,
+    )
+    return True
+
+
+def upsert_portfolio_backtest_monthly_history(
+    portfolio_id: str,
+    year_month: str,
+    run_kind: str,
+    artifact_json: str,
+    summary_metrics_json: Optional[str],
+    data_date_range: Optional[str],
+    created_at: str,
+) -> None:
+    init_db()
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO portfolio_backtest_monthly_history (
+                portfolio_id, year_month, run_kind, artifact_json,
+                summary_metrics_json, data_date_range, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(portfolio_id, year_month) DO UPDATE SET
+                run_kind = excluded.run_kind,
+                artifact_json = excluded.artifact_json,
+                summary_metrics_json = excluded.summary_metrics_json,
+                data_date_range = excluded.data_date_range,
+                created_at = excluded.created_at
+            """,
+            (
+                portfolio_id,
+                year_month,
+                run_kind,
+                artifact_json,
+                summary_metrics_json,
+                data_date_range,
+                created_at,
+            ),
+        )
+
+
+def delete_portfolio_backtest_data(portfolio_id: str) -> None:
+    init_db()
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM portfolio_backtest_monthly_history WHERE portfolio_id = ?",
+            (portfolio_id,),
+        )
+        conn.execute(
+            "DELETE FROM portfolio_backtest_snapshots WHERE portfolio_id = ?",
+            (portfolio_id,),
+        )
+
+
+def delete_scenario_backtest_snapshot(scenario_id: str) -> None:
+    init_db()
+    sid = _scenario_id_storage_key(scenario_id)
+    if not sid:
+        return
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM portfolio_backtest_snapshots WHERE scenario_id = ?",
+            (sid,),
+        )
+
+
+def list_all_saved_portfolios(limit: int = 5000) -> List[Dict[str, Any]]:
+    """All saved portfolios (for batch jobs)."""
+    init_db()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT portfolio_id, user_id, portfolio_category, portfolio_ticker_weights, intake_json
+            FROM saved_portfolios
+            ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        raw = d.get("portfolio_ticker_weights")
+        if isinstance(raw, str):
+            try:
+                d["portfolio_ticker_weights"] = json.loads(raw)
+            except json.JSONDecodeError:
+                d["portfolio_ticker_weights"] = {}
+        raw_i = d.get("intake_json")
+        if isinstance(raw_i, str):
+            try:
+                d["intake"] = json.loads(raw_i)
+            except json.JSONDecodeError:
+                d["intake"] = None
+        else:
+            d["intake"] = raw_i
+        d.pop("intake_json", None)
+        out.append(d)
+    return out
 
 
 def list_portfolios(
@@ -1535,7 +1830,10 @@ def delete_scenario(scenario_id: str, user_id: str) -> bool:
             "DELETE FROM saved_scenarios WHERE scenario_id = ? AND user_id = ?",
             (scenario_id, user_id),
         )
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+    if deleted:
+        delete_scenario_backtest_snapshot(scenario_id)
+    return deleted
 
 
 def update_scenario(
@@ -1660,6 +1958,14 @@ def delete_saved_portfolio(portfolio_id: str, user_id: str) -> bool:
     with get_db() as conn:
         conn.execute("DELETE FROM portfolio_value_history WHERE portfolio_id = ?", (portfolio_id,))
         conn.execute(
+            "DELETE FROM portfolio_backtest_monthly_history WHERE portfolio_id = ?",
+            (portfolio_id,),
+        )
+        conn.execute(
+            "DELETE FROM portfolio_backtest_snapshots WHERE portfolio_id = ?",
+            (portfolio_id,),
+        )
+        conn.execute(
             """
             DELETE FROM life_scenarios
             WHERE user_id = ? AND (
@@ -1688,6 +1994,20 @@ def delete_portfolios_by_user(user_id: str) -> int:
         conn.execute(
             """
             DELETE FROM portfolio_value_history
+            WHERE portfolio_id IN (SELECT portfolio_id FROM saved_portfolios WHERE user_id = ?)
+            """,
+            (user_id,),
+        )
+        conn.execute(
+            """
+            DELETE FROM portfolio_backtest_monthly_history
+            WHERE portfolio_id IN (SELECT portfolio_id FROM saved_portfolios WHERE user_id = ?)
+            """,
+            (user_id,),
+        )
+        conn.execute(
+            """
+            DELETE FROM portfolio_backtest_snapshots
             WHERE portfolio_id IN (SELECT portfolio_id FROM saved_portfolios WHERE user_id = ?)
             """,
             (user_id,),

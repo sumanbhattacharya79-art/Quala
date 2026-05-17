@@ -14,7 +14,7 @@ _log = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Header, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -126,6 +126,18 @@ from backend.db import (  # noqa: E402
     update_scenario,
     upsert_user_net_worth,
     verify_user,
+)
+from backend.portfolio_backtest_store import (  # noqa: E402
+    copy_portfolio_backtest_to_scenario,
+    get_backtest_snapshot,
+    get_backtest_snapshot_meta,
+    persist_backtest_snapshot,
+)
+from backend.saved_portfolio_intake import merged_intake_for_saved_portfolio  # noqa: E402
+from backend.portfolio_jobs import (  # noqa: E402
+    persist_life_planner_portfolio_backtests,
+    refresh_all_saved_portfolio_backtests,
+    refresh_all_saved_portfolio_values,
 )
 from backend.portfolio_valuation import (  # noqa: E402
     initialize_positions_for_portfolio,
@@ -888,27 +900,129 @@ def list_saved_portfolios(
 
 
 @app.get("/api/portfolio/saved/{portfolio_id}")
-def get_saved_portfolio(portfolio_id: str) -> Dict[str, object]:
+def get_saved_portfolio(
+    portfolio_id: str,
+    include_backtest: bool = Query(
+        True,
+        description="Include persisted backtest/MC artifacts when available",
+    ),
+    scenario_id: Optional[str] = Query(
+        None,
+        description="When set, load backtest snapshot for this saved scenario (what-if); else portfolio-level",
+    ),
+    refresh_mtm: bool = Query(
+        True,
+        description="Refresh mark-to-market from latest daily CSVs",
+    ),
+) -> Dict[str, object]:
     """Fetch a single saved portfolio by id. Refreshes mark-to-market from data_output CSVs and returns valuation_history."""
     row = get_portfolio(portfolio_id)
     if not row:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    try:
-        snap = refresh_portfolio_valuation(portfolio_id)
-        row = get_portfolio(portfolio_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="Portfolio not found")
-        row["valuation_history"] = snap.get("valuation_history") or []
-        row["valuation_as_of"] = snap.get("valuation_as_of")
-    except Exception as exc:
-        _log.warning("refresh_portfolio_valuation: %s", exc)
-        row["valuation_history"] = []
+    if refresh_mtm:
+        try:
+            snap = refresh_portfolio_valuation(portfolio_id)
+            row = get_portfolio(portfolio_id)
+            if not row:
+                raise HTTPException(status_code=404, detail="Portfolio not found")
+            row["valuation_history"] = snap.get("valuation_history") or []
+            row["valuation_as_of"] = snap.get("valuation_as_of")
+        except Exception as exc:
+            _log.warning("refresh_portfolio_valuation: %s", exc)
+            row["valuation_history"] = []
+            row["valuation_as_of"] = None
+    else:
+        from backend.db import get_portfolio_value_history
+
+        row["valuation_history"] = get_portfolio_value_history(portfolio_id)
         row["valuation_as_of"] = None
+    if include_backtest:
+        sid = (scenario_id or "").strip() or None
+        meta = get_backtest_snapshot_meta(portfolio_id, scenario_id=sid)
+        art = get_backtest_snapshot(portfolio_id, scenario_id=sid)
+        if art:
+            row["backtest_artifacts"] = art
+            row["backtest_load_source"] = "portfolio_backtest_snapshots"
+            row["backtest_scenario_id"] = sid or ""
+            if meta:
+                row["backtest_persisted_at"] = meta.get("updated_at")
+                row["backtest_run_kind"] = meta.get("run_kind")
+            _log.info(
+                "GET /api/portfolio/saved/%s backtest_source=persisted_db scenario_id=%s scenarios=%s",
+                portfolio_id,
+                sid or "",
+                len(art.get("scenarios") or []) if isinstance(art.get("scenarios"), list) else 0,
+            )
+        else:
+            row["backtest_load_source"] = "none"
+            _log.info(
+                "GET /api/portfolio/saved/%s backtest_source=none scenario_id=%s",
+                portfolio_id,
+                sid or "",
+            )
     return row
+
+
+@app.get("/api/portfolio/saved/{portfolio_id}/backtest-artifacts")
+def get_saved_portfolio_backtest_artifacts(
+    portfolio_id: str,
+    user_id: str = Query(..., description="Owner user id"),
+    scenario_id: Optional[str] = Query(None, description="Saved scenario id for what-if snapshot"),
+) -> Dict[str, object]:
+    """Return persisted backtest / Monte Carlo artifacts for chart replay without re-running."""
+    row = get_portfolio(portfolio_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    if row["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    sid = (scenario_id or "").strip() or None
+    if sid:
+        sc = get_scenario(sid)
+        if not sc or sc.get("portfolio_id") != portfolio_id or sc.get("user_id") != user_id:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+    artifacts = get_backtest_snapshot(portfolio_id, scenario_id=sid)
+    if not artifacts:
+        raise HTTPException(status_code=404, detail="No persisted backtest for this portfolio")
+    is_retirement = (row.get("portfolio_category") or "growth") == "retirement"
+    return {
+        "portfolio_id": portfolio_id,
+        "scenario_id": sid or "",
+        "artifacts": artifacts,
+        "agent": "Emu" if is_retirement else "Ana",
+    }
 
 
 class RefreshValuationsRequest(BaseModel):
     user_id: str
+
+
+def _persist_saved_portfolio_backtest(
+    portfolio_id: str,
+    user_id: str,
+    row: Dict[str, object],
+    artifacts: Dict[str, object],
+    user_intake: Dict[str, object],
+    scenario_id: Optional[str] = None,
+) -> None:
+    try:
+        is_retirement = (row.get("portfolio_category") or "growth") == "retirement"
+        weights = row.get("portfolio_ticker_weights")
+        persist_backtest_snapshot(
+            portfolio_id,
+            user_id,
+            "retirement" if is_retirement else "growth",
+            artifacts,
+            intake_json=user_intake if isinstance(user_intake, dict) else None,
+            portfolio_weights=weights if isinstance(weights, dict) else None,
+            scenario_id=scenario_id,
+        )
+    except Exception as exc:
+        _log.warning(
+            "persist backtest snapshot %s scenario_id=%s: %s",
+            portfolio_id,
+            scenario_id or "",
+            exc,
+        )
 
 
 @app.post("/api/portfolio/saved/refresh-valuations")
@@ -918,6 +1032,33 @@ def refresh_saved_portfolio_valuations(payload: RefreshValuationsRequest) -> Dic
     return {"status": "ok", "refreshed": n}
 
 
+def _require_admin_job_key(x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")) -> None:
+    """When ADMIN_API_KEY is set, batch job endpoints require matching X-Admin-Key header."""
+    expected = (os.environ.get("ADMIN_API_KEY") or "").strip()
+    if not expected:
+        return
+    if (x_admin_key or "").strip() != expected:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+
+@app.post("/api/admin/jobs/refresh-all-portfolio-values")
+def admin_refresh_all_portfolio_values(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+) -> Dict[str, object]:
+    """Batch job: refresh MTM + daily history for every saved portfolio (after daily CSV update)."""
+    _require_admin_job_key(x_admin_key)
+    return refresh_all_saved_portfolio_values()
+
+
+@app.post("/api/admin/jobs/refresh-all-portfolio-backtests")
+def admin_refresh_all_portfolio_backtests(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+) -> Dict[str, object]:
+    """Batch job: re-run backtests/MC for every saved portfolio + monthly history row."""
+    _require_admin_job_key(x_admin_key)
+    return refresh_all_saved_portfolio_backtests(record_monthly_history=True)
+
+
 class PortfolioBacktestRequest(BaseModel):
     """Request to run backtest for a saved portfolio."""
     user_id: str  # must match portfolio owner
@@ -925,6 +1066,7 @@ class PortfolioBacktestRequest(BaseModel):
     # Growth: when True (default), MC starting notional uses live portfolio_value over merged intake initial_value.
     # Set False after what-if edits so the submitted intake initial_value is honored.
     use_portfolio_mark_for_initial: bool = True
+    scenario_id: Optional[str] = None  # when set, persist under this saved scenario (what-if flow)
 
 
 @app.delete("/api/portfolio/saved/{portfolio_id}")
@@ -951,27 +1093,25 @@ def delete_saved_portfolio_endpoint(
 @app.post("/api/portfolio/saved/{portfolio_id}/backtest")
 def run_portfolio_backtest(portfolio_id: str, payload: PortfolioBacktestRequest) -> Dict[str, object]:
     """Run backtest for a saved portfolio. Returns artifacts (Ana-style for growth, Emu-style for retirement)."""
+    sid = (payload.scenario_id or "").strip() or None
+    _log.info(
+        "POST /api/portfolio/saved/%s/backtest action=COMPUTE_MC user_id=%s scenario_id=%s",
+        portfolio_id,
+        payload.user_id,
+        sid or "",
+    )
     row = get_portfolio(portfolio_id)
     if not row:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     if row["user_id"] != payload.user_id:
         raise HTTPException(status_code=403, detail="Not authorized to run backtest for this portfolio")
-    user_intake: Dict[str, object] = {}
-    p_snap = row.get("intake")
-    if isinstance(p_snap, dict):
-        user_intake.update(p_snap)
-    db_intake = get_user_intake(payload.user_id)
-    if db_intake:
-        skip = {"user_id", "created_at", "updated_at"}
-        for k, v in db_intake.items():
-            if k in skip:
-                continue
-            if k not in user_intake or user_intake.get(k) in (None, "", []):
-                user_intake[k] = v
-    if payload.intake and isinstance(payload.intake, dict):
-        user_intake.update(payload.intake)
-    if not user_intake:
-        user_intake = {}
+    if sid:
+        sc = get_scenario(sid)
+        if not sc or sc.get("portfolio_id") != portfolio_id or sc.get("user_id") != payload.user_id:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+    user_intake = merged_intake_for_saved_portfolio(
+        portfolio_id, payload.user_id, payload.intake if isinstance(payload.intake, dict) else None
+    )
     weights = row["portfolio_ticker_weights"]
     is_retirement = (row.get("portfolio_category") or "growth") == "retirement"
     sec_w = row.get("portfolio_sector_weights")
@@ -987,6 +1127,14 @@ def run_portfolio_backtest(portfolio_id: str, payload: PortfolioBacktestRequest)
     )
     if not artifacts:
         raise HTTPException(status_code=500, detail="Backtest failed or returned no results")
+    _persist_saved_portfolio_backtest(
+        portfolio_id, payload.user_id, row, artifacts, user_intake, scenario_id=sid
+    )
+    _log.info(
+        "POST /api/portfolio/saved/%s/backtest action=PERSISTED_SNAPSHOT scenario_id=%s",
+        portfolio_id,
+        sid or "",
+    )
     try:
         snap = refresh_portfolio_valuation(portfolio_id)
         row = get_portfolio(portfolio_id)
@@ -999,6 +1147,8 @@ def run_portfolio_backtest(portfolio_id: str, payload: PortfolioBacktestRequest)
         "portfolio": row,
         "artifacts": artifacts,
         "agent": "Emu" if is_retirement else "Ana",
+        "backtest_load_source": "computed",
+        "backtest_scenario_id": sid or "",
     }
 
 
@@ -1034,22 +1184,9 @@ def update_saved_portfolio_composition(
     row = get_portfolio(portfolio_id)
     if not row:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    user_intake: Dict[str, object] = {}
-    p_snap = row.get("intake")
-    if isinstance(p_snap, dict):
-        user_intake.update(p_snap)
-    db_intake = get_user_intake(payload.user_id)
-    if db_intake:
-        skip = {"user_id", "created_at", "updated_at"}
-        for k, v in db_intake.items():
-            if k in skip:
-                continue
-            if k not in user_intake or user_intake.get(k) in (None, "", []):
-                user_intake[k] = v
-    if payload.intake and isinstance(payload.intake, dict):
-        user_intake.update(payload.intake)
-    if not user_intake:
-        user_intake = {}
+    user_intake = merged_intake_for_saved_portfolio(
+        portfolio_id, payload.user_id, payload.intake if isinstance(payload.intake, dict) else None
+    )
     weights = row["portfolio_ticker_weights"]
     is_retirement = (row.get("portfolio_category") or "growth") == "retirement"
     sec_w = row.get("portfolio_sector_weights")
@@ -1065,6 +1202,7 @@ def update_saved_portfolio_composition(
     )
     if not artifacts:
         raise HTTPException(status_code=500, detail="Backtest failed or returned no results")
+    _persist_saved_portfolio_backtest(portfolio_id, payload.user_id, row, artifacts, user_intake)
     try:
         snap = refresh_portfolio_valuation(portfolio_id)
         row = get_portfolio(portfolio_id)
@@ -1112,10 +1250,17 @@ def save_scenario_endpoint(payload: SaveScenarioRequest) -> Dict[str, object]:
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    linked = copy_portfolio_backtest_to_scenario(
+        payload.portfolio_id,
+        payload.user_id,
+        sid,
+        from_scenario_id="",
+    )
     return {
         "status": "ok",
         "scenario_id": sid,
         "scenario_name": scenario_name,
+        "backtest_linked": linked,
     }
 
 
@@ -1158,7 +1303,10 @@ class UpdateLifePlannerIntakesRequest(BaseModel):
 
 
 @app.post("/api/life-scenario/save")
-def save_life_scenario_endpoint(payload: SaveLifeScenarioRequest) -> Dict[str, object]:
+def save_life_scenario_endpoint(
+    payload: SaveLifeScenarioRequest,
+    background_tasks: BackgroundTasks,
+) -> Dict[str, object]:
     try:
         out = save_life_scenario_bundle(
             user_id=payload.user_id,
@@ -1175,6 +1323,14 @@ def save_life_scenario_endpoint(payload: SaveLifeScenarioRequest) -> Dict[str, o
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    background_tasks.add_task(
+        persist_life_planner_portfolio_backtests,
+        payload.user_id,
+        payload.growth_portfolio_id,
+        payload.retirement_portfolio_id,
+        dict(payload.growth_intake),
+        dict(payload.retirement_intake),
+    )
     return {"status": "ok", **out}
 
 
@@ -1187,10 +1343,27 @@ def list_life_scenarios_endpoint(user_id: str = Query(...)) -> Dict[str, object]
 def get_life_scenario_endpoint(
     life_scenario_id: str,
     user_id: str = Query(..., description="Owner user id"),
+    include_backtest: bool = Query(
+        True,
+        description="Include persisted growth/retirement backtest artifacts when available",
+    ),
 ) -> Dict[str, object]:
     row = get_life_scenario_for_user(life_scenario_id, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Life scenario not found")
+    if include_backtest:
+        g = row.get("growth") or {}
+        r = row.get("retirement") or {}
+        gpid = g.get("portfolio_id")
+        rpid = r.get("portfolio_id")
+        if gpid:
+            g_art = get_backtest_snapshot(str(gpid))
+            if g_art:
+                row["growth_backtest_artifacts"] = g_art
+        if rpid:
+            r_art = get_backtest_snapshot(str(rpid))
+            if r_art:
+                row["retirement_backtest_artifacts"] = r_art
     return row
 
 
@@ -1244,11 +1417,29 @@ def delete_life_scenario_endpoint(
 
 
 @app.get("/api/scenario/{scenario_id}")
-def get_saved_scenario(scenario_id: str) -> Dict[str, object]:
+def get_saved_scenario(
+    scenario_id: str,
+    include_backtest: bool = Query(
+        True,
+        description="Include persisted what-if backtest for this scenario when available",
+    ),
+) -> Dict[str, object]:
     """Fetch a single scenario by id."""
     row = get_scenario(scenario_id)
     if not row:
         raise HTTPException(status_code=404, detail="Scenario not found")
+    if include_backtest:
+        pid = str(row.get("portfolio_id") or "")
+        art = get_backtest_snapshot(pid, scenario_id=scenario_id) if pid else None
+        if art:
+            row["backtest_artifacts"] = art
+            row["backtest_load_source"] = "portfolio_backtest_snapshots"
+            row["backtest_scenario_id"] = scenario_id
+            meta = get_backtest_snapshot_meta(pid, scenario_id=scenario_id)
+            if meta:
+                row["backtest_persisted_at"] = meta.get("updated_at")
+        else:
+            row["backtest_load_source"] = "none"
     return row
 
 
