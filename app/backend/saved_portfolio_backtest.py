@@ -628,7 +628,8 @@ def _build_intake_context(i: dict) -> Optional[IntakeContext]:
                     continue
                 y = int(e.get("years", e.get("years_from_start", 0)))
                 a = float(e.get("amount", e.get("value", 0)))
-                if y < 0 or a <= 0:
+                # amount > 0 = one-time outflow; amount < 0 = one-time inflow (what-if windfall / growth inflow)
+                if y < 0 or a == 0:
                     continue
                 lg = str(e.get("label") or "").strip()
                 if lg:
