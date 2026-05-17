@@ -2414,13 +2414,25 @@ export default function App() {
           localStorage.setItem(FORM_STATE_KEY, JSON.stringify(formStateWithoutWhatIf(next)));
           setUserFilledIntakeForm(true);
         }
-        const persistedArt = scenarioRow.backtest_artifacts;
+        let persistedArt = scenarioRow.backtest_artifacts;
+        let loadSource = scenarioRow.backtest_load_source;
+        if (!compareBacktestArtifactsReady(persistedArt)) {
+          const pr = await getJson(
+            `/api/portfolio/saved/${encodeURIComponent(portfolioId)}?refresh_mtm=false&include_backtest=true&scenario_id=`,
+          );
+          if (loadToken !== portfolioViewLoadTokenRef.current) return;
+          if (compareBacktestArtifactsReady(pr?.backtest_artifacts)) {
+            persistedArt = pr.backtest_artifacts;
+            loadSource = pr.backtest_load_source;
+            console.info("[scenario] Using portfolio-level snapshot (no scenario row yet)", scenarioId);
+          }
+        }
         const cat = (portfolioRow.portfolio_category || "growth").toLowerCase();
         if (persistedArt && compareBacktestArtifactsReady(persistedArt)) {
           console.info(
             "[scenario] Charts from Supabase snapshot",
             scenarioId,
-            scenarioRow.backtest_load_source,
+            loadSource,
           );
           setPortfolioViewLoading(false);
           setPortfolioViewLoadingPhase("idle");
@@ -2431,6 +2443,7 @@ export default function App() {
           });
           handleArtifacts({ artifacts: persistedArt });
         } else {
+          console.warn("[scenario] No persisted snapshot — will POST /backtest", scenarioId);
           await runPortfolioBacktestWithFormSnapshot(
             portfolioId,
             formForBacktest,
@@ -4942,8 +4955,16 @@ export default function App() {
                                     );
                                     e.dataTransfer.effectAllowed = "copy";
                                   }}
-                                  onClick={() => handleScenarioClick(s.scenario_id, s.portfolio_id)}
-                                  onKeyDown={(e) => e.key === "Enter" && handleScenarioClick(s.scenario_id, s.portfolio_id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleScenarioClick(s.scenario_id, p.portfolio_id);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.stopPropagation();
+                                      handleScenarioClick(s.scenario_id, p.portfolio_id);
+                                    }
+                                  }}
                                   style={{ cursor: "pointer", fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}
                                   title="Click to open · Drag to Compare"
                                 >

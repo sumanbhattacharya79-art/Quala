@@ -1438,8 +1438,14 @@ def get_saved_scenario(
             meta = get_backtest_snapshot_meta(pid, scenario_id=scenario_id)
             if meta:
                 row["backtest_persisted_at"] = meta.get("updated_at")
+            _log.info(
+                "GET /api/scenario/%s backtest_source=persisted_db scenarios=%s",
+                scenario_id,
+                len(art.get("scenarios") or []) if isinstance(art.get("scenarios"), list) else 0,
+            )
         else:
             row["backtest_load_source"] = "none"
+            _log.info("GET /api/scenario/%s backtest_source=none", scenario_id)
     return row
 
 
