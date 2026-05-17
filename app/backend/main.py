@@ -1018,7 +1018,7 @@ def _persist_saved_portfolio_backtest(
     artifacts: Dict[str, object],
     user_intake: Dict[str, object],
     scenario_id: Optional[str] = None,
-) -> None:
+) -> bool:
     try:
         is_retirement = (row.get("portfolio_category") or "growth") == "retirement"
         weights = row.get("portfolio_ticker_weights")
@@ -1031,13 +1031,16 @@ def _persist_saved_portfolio_backtest(
             portfolio_weights=weights if isinstance(weights, dict) else None,
             scenario_id=scenario_id,
         )
+        return True
     except Exception as exc:
-        _log.warning(
-            "persist backtest snapshot %s scenario_id=%s: %s",
+        _log.error(
+            "persist backtest snapshot failed %s scenario_id=%s: %s",
             portfolio_id,
             scenario_id or "",
             exc,
+            exc_info=True,
         )
+        return False
 
 
 @app.post("/api/portfolio/saved/refresh-valuations")
@@ -1142,14 +1145,20 @@ def run_portfolio_backtest(portfolio_id: str, payload: PortfolioBacktestRequest)
     )
     if not artifacts:
         raise HTTPException(status_code=500, detail="Backtest failed or returned no results")
-    _persist_saved_portfolio_backtest(
+    if _persist_saved_portfolio_backtest(
         portfolio_id, payload.user_id, row, artifacts, user_intake, scenario_id=sid
-    )
-    _log.info(
-        "POST /api/portfolio/saved/%s/backtest action=PERSISTED_SNAPSHOT scenario_id=%s",
-        portfolio_id,
-        sid or "",
-    )
+    ):
+        _log.info(
+            "POST /api/portfolio/saved/%s/backtest action=PERSISTED_SNAPSHOT scenario_id=%s",
+            portfolio_id,
+            sid or "",
+        )
+    else:
+        _log.error(
+            "POST /api/portfolio/saved/%s/backtest action=PERSIST_FAILED scenario_id=%s",
+            portfolio_id,
+            sid or "",
+        )
     try:
         snap = refresh_portfolio_valuation(portfolio_id)
         row = get_portfolio(portfolio_id)

@@ -64,7 +64,12 @@ def get_db():
     if use_postgres():
         pool = get_pool()
         with pool.connection() as conn:
-            yield PgConnectionAdapter(conn)
+            try:
+                yield PgConnectionAdapter(conn)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         return
     conn = _get_connection()
     try:
@@ -1761,6 +1766,10 @@ def delete_life_scenario_for_user(life_scenario_id: str, user_id: str) -> bool:
                 "DELETE FROM saved_scenarios WHERE user_id = ? AND scenario_id = ?",
                 (user_id, rid),
             )
+    if own_g:
+        delete_scenario_backtest_snapshot(gid)
+    if own_r:
+        delete_scenario_backtest_snapshot(rid)
     return True
 
 
