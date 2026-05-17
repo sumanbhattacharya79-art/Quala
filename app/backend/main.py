@@ -14,9 +14,10 @@ _log = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Header, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Header, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
@@ -282,6 +283,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class _ApiNoCacheMiddleware(BaseHTTPMiddleware):
+    """Prevent browsers/CDNs from caching dynamic portfolio/backtest API responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+        return response
+
+
+app.add_middleware(_ApiNoCacheMiddleware)
 
 
 def _static_dir() -> Path:

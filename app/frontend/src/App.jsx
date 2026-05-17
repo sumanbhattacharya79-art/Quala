@@ -74,6 +74,7 @@ import { SameCategoryComparePanel } from "./SameCategoryComparePanel.jsx";
 import { BigSpendingUpcomingEditor } from "./BigSpendingUpcomingEditor.jsx";
 import {
   compareBacktestArtifactsReady,
+  normalizeBacktestArtifacts,
   computeGoalFundedPercent,
   extractGrowthTerminalValueP50,
   extractRetirementSuccessPercentForDial,
@@ -2300,7 +2301,7 @@ export default function App() {
       setView("portfolio");
       try {
         const row = await getJson(
-          `/api/portfolio/saved/${encodeURIComponent(portfolioId)}?refresh_mtm=true&include_backtest=true&scenario_id=`,
+          `/api/portfolio/saved/${encodeURIComponent(portfolioId)}?refresh_mtm=true&include_backtest=true&scenario_id=&_=${Date.now()}`,
         );
         if (loadToken !== portfolioViewLoadTokenRef.current) {
           return;
@@ -2329,7 +2330,7 @@ export default function App() {
           setUserFilledIntakeForm(true);
           setProfileSaved(false);
         }
-        const persistedArt = row.backtest_artifacts;
+        const persistedArt = normalizeBacktestArtifacts(row.backtest_artifacts);
         const loadSource = row.backtest_load_source;
         const cat = (row.portfolio_category || "growth").toLowerCase();
         if (persistedArt && compareBacktestArtifactsReady(persistedArt)) {

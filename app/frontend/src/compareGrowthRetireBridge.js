@@ -3,13 +3,29 @@
  * P50 = median terminal portfolio value from growth Monte Carlo at the accumulation horizon.
  */
 
+/** Parse persisted snapshot from API (object or JSON string). */
+export function normalizeBacktestArtifacts(artifacts) {
+  if (artifacts == null) return null;
+  let raw = artifacts;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return raw;
+}
+
 /**
  * True when backtest response has chart/MC payload (not null, not {}, not missing scenarios).
  * Empty objects are truthy in JS; do not use bare `if (artifacts)` for gating edit mode.
  */
 export function compareBacktestArtifactsReady(artifacts) {
-  if (!artifacts || typeof artifacts !== "object") return false;
-  const scenarios = artifacts.scenarios;
+  const a = normalizeBacktestArtifacts(artifacts);
+  if (!a) return false;
+  const scenarios = a.scenarios;
   return Array.isArray(scenarios) && scenarios.length > 0;
 }
 

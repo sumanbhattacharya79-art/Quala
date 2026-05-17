@@ -10,8 +10,11 @@ export function resolveApiUrl(url) {
   return `${base}${path}`;
 }
 
-export async function getJson(url) {
-  const res = await fetch(resolveApiUrl(url));
+export async function getJson(url, options = {}) {
+  const res = await fetch(resolveApiUrl(url), {
+    cache: options.cache ?? "no-store",
+    signal: options.signal,
+  });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
     const msg = typeof detail.detail === "string" ? detail.detail : "Request failed";
@@ -77,7 +80,7 @@ export async function fetchPersistedBacktestArtifacts(portfolioId, userId, scena
   const url = resolveApiUrl(
     `/api/portfolio/saved/${encodeURIComponent(portfolioId)}/backtest-artifacts?${q}`,
   );
-  const res = await fetch(url);
+  const res = await fetch(url, { cache: "no-store" });
   if (res.status === 404) return null;
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
