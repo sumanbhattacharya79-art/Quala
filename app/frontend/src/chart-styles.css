@@ -670,6 +670,154 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Mobile layout (phases 4–5 in mobile-view.md) */
+.charts-grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.retirement-sector-industry-row.charts-grid-2col {
+  margin-top: 16px;
+}
+
+.compare-page-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
+  width: 100%;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 8px;
+}
+.compare-page-inner {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.compare-editors-row {
+  display: flex;
+  gap: 20px;
+  align-items: stretch;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.compare-editor-col {
+  flex: 1 1 400px;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.compare-editors-row:not(.compare-editors-row--tabbed) .compare-editor-col {
+  display: flex;
+}
+.compare-mobile-tabs {
+  display: none;
+  gap: 8px;
+  margin-top: 16px;
+  margin-bottom: 4px;
+}
+.compare-mobile-tab {
+  flex: 1;
+  min-height: 44px;
+  font-family: "DM Mono", monospace;
+  font-size: 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid var(--border-soft, #1a1a1a);
+  background: var(--surface, #111);
+  color: var(--text-muted, #888);
+}
+.compare-mobile-tab.selected {
+  border-color: #c8a96e;
+  color: #c8a96e;
+  background: #c8a96e12;
+}
+.portfolio-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+}
+.compare-portfolio-headers-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: stretch;
+  width: 100%;
+}
+@media (min-width: 769px) {
+  .compare-page-inner {
+    min-width: 920px;
+  }
+}
+
+@media (max-width: 768px) {
+  .scenarios-row {
+    grid-template-columns: 1fr;
+  }
+  .chosen-portfolio-charts-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    min-width: 0;
+    min-height: 280px;
+  }
+  .chosen-portfolio-top-row {
+    flex-direction: column;
+  }
+  .chosen-portfolio-top-row .chart-panel-right {
+    min-width: 0;
+    width: 100%;
+  }
+  .chart-panel-left,
+  .chart-panel-right {
+    min-width: 0;
+    width: 100%;
+  }
+  .charts-grid-2col,
+  .retirement-charts-row-1 {
+    grid-template-columns: 1fr !important;
+  }
+  .compare-chart-pair-row {
+    grid-template-columns: 1fr;
+  }
+  .compare-drop-zones-row {
+    flex-direction: column;
+    flex-wrap: wrap;
+  }
+  .compare-drop-zone-col {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+  }
+  .compare-portfolio-headers-row {
+    grid-template-columns: 1fr;
+  }
+  .compare-page-inner {
+    min-width: 0;
+  }
+  .compare-page-scroll {
+    overflow-x: visible;
+  }
+  .compare-mobile-tabs {
+    display: flex;
+  }
+  .compare-editors-row.compare-editors-row--tabbed .compare-editor-col {
+    display: none;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .compare-editors-row.compare-editors-row--tabbed .compare-editor-col.compare-editor-col--active {
+    display: flex;
+  }
+  .compare-messages-area {
+    padding: 16px !important;
+  }
+  .compare-page-subhint {
+    font-size: 11px;
+    line-height: 1.45;
+  }
+}
 .pricing-plan-card {
   border: 1px solid #2a2a2a;
   border-radius: 10px;

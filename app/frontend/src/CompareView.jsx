@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMobileViewport } from "./useMobileViewport.js";
 import { renderComparePairedCharts } from "./charts.js";
 import {
   compareBacktestArtifactsReady,
@@ -622,6 +623,8 @@ export function CompareView({
   theme = "dark",
 }) {
   const pairedChartsRef = useRef(null);
+  const isMobile = useMobileViewport();
+  const [mobileColumnTab, setMobileColumnTab] = useState("growth");
 
   const leftArt = growthArtifacts;
   const rightArt = retireArtifacts;
@@ -682,7 +685,7 @@ export function CompareView({
   const showGoalPanel = compareLeftSel && compareRightSel;
 
   return (
-    <div className="messages-area" style={{ padding: "20px 28px", width: "100%", boxSizing: "border-box" }}>
+    <div className="messages-area compare-messages-area" style={{ padding: "20px 28px", width: "100%", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap", width: "100%" }}>
         <button type="button" className="toggle-btn" onClick={onBack} title="Back">
           ←
@@ -804,8 +807,8 @@ export function CompareView({
           {connectPairScenarioSuccess}
         </div>
       ) : null}
-      <div style={{ overflowX: "auto", overflowY: "visible", width: "100%", WebkitOverflowScrolling: "touch", paddingBottom: 8 }}>
-        <div style={{ minWidth: 920 }}>
+      <div className="compare-page-scroll">
+        <div className="compare-page-inner">
           {intakeFrozen ? null : (
             <div className="compare-drop-zones-row">
               {["left", "right"].map((side) => {
@@ -865,16 +868,32 @@ export function CompareView({
           {compareHydrating ? <div className="compare-drop-zone-loading">Loading saved intake…</div> : null}
           {showEditors ? (
             <>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 20,
-                  alignItems: "stretch",
-                  flexWrap: "wrap",
-                  marginTop: 16,
-                }}
-              >
-                <div style={{ flex: "1 1 400px", minWidth: 280, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="compare-mobile-tabs" role="tablist" aria-label="Growth or retirement intake">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mobileColumnTab === "growth"}
+                  className={`compare-mobile-tab${mobileColumnTab === "growth" ? " selected" : ""}`}
+                  onClick={() => setMobileColumnTab("growth")}
+                >
+                  Growth
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mobileColumnTab === "retirement"}
+                  className={`compare-mobile-tab${mobileColumnTab === "retirement" ? " selected" : ""}`}
+                  onClick={() => setMobileColumnTab("retirement")}
+                >
+                  Retirement
+                </button>
+              </div>
+              <div className={`compare-editors-row${isMobile ? " compare-editors-row--tabbed" : ""}`}>
+                <div
+                  className={`compare-editor-col${
+                    !isMobile || mobileColumnTab === "growth" ? " compare-editor-col--active" : ""
+                  }`}
+                >
                   <ComparePortfolioColumnHeader sel={compareLeftSel} roleLabel="Growth" frozenShortHeader={false} />
                   <CompareGrowthIntakeColumn
                     form={growthForm}
@@ -884,7 +903,11 @@ export function CompareView({
                     intakeFrozen={intakeFrozen}
                   />
                 </div>
-                <div style={{ flex: "1 1 400px", minWidth: 280, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div
+                  className={`compare-editor-col${
+                    !isMobile || mobileColumnTab === "retirement" ? " compare-editor-col--active" : ""
+                  }`}
+                >
                   <ComparePortfolioColumnHeader sel={compareRightSel} roleLabel="Retirement" frozenShortHeader={false} />
                   <CompareRetirementIntakeColumn
                     form={retireForm}

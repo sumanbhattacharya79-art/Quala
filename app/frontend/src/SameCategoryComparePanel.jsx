@@ -44,7 +44,7 @@ export function SameCategoryComparePanel({
   const showDiff = intakeLeft && intakeRight && !hydrating;
 
   return (
-    <div className="messages-area" style={{ padding: "20px 28px", width: "100%", boxSizing: "border-box" }}>
+    <div className="messages-area compare-messages-area" style={{ padding: "20px 28px", width: "100%", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
         <button type="button" className="toggle-btn" onClick={onBack} title="Back">
           ←
@@ -64,8 +64,8 @@ export function SameCategoryComparePanel({
         </div>
       ) : null}
 
-      <div style={{ overflowX: "auto", overflowY: "visible", width: "100%", WebkitOverflowScrolling: "touch", paddingBottom: 8 }}>
-        <div style={{ minWidth: 920 }}>
+      <div className="compare-page-scroll">
+        <div className="compare-page-inner">
           <div className="compare-drop-zones-row">
             {["left", "right"].map((side) => {
               const isLeft = side === "left";
@@ -152,17 +152,7 @@ export function SameCategoryComparePanel({
       </div>
 
       {leftSel || rightSel ? (
-        <div
-          className="compare-portfolio-headers-row"
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 16,
-            marginTop: 20,
-            marginBottom: 10,
-            alignItems: "stretch",
-          }}
-        >
+        <div className="compare-portfolio-headers-row" style={{ marginTop: 20, marginBottom: 10 }}>
           <ComparePortfolioColumnHeader sel={leftSel} />
           <ComparePortfolioColumnHeader sel={rightSel} />
         </div>

@@ -586,10 +586,7 @@ function renderInlineCharts(artifacts, parentEl, options = {}) {
 
     if (isRetirement) {
       const tickersSpaghettiRow = document.createElement("div");
-      tickersSpaghettiRow.className = "retirement-charts-row-1";
-      tickersSpaghettiRow.style.display = "grid";
-      tickersSpaghettiRow.style.gridTemplateColumns = "1fr 1fr";
-      tickersSpaghettiRow.style.gap = "16px";
+      tickersSpaghettiRow.className = "retirement-charts-row-1 charts-grid-2col";
       const tickersCard = composition && Object.keys(composition).length
         ? (() => {
             const c = _makeChartCard("Retirement Portfolio — Tickers & Weights");
@@ -622,8 +619,7 @@ function renderInlineCharts(artifacts, parentEl, options = {}) {
         (industryWeights && Object.keys(industryWeights).length)
       ) {
         const siRow = document.createElement("div");
-        siRow.className = "retirement-sector-industry-row";
-        siRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:16px;width:100%;margin-top:16px;";
+        siRow.className = "retirement-sector-industry-row charts-grid-2col";
         if (sectorWeights && Object.keys(sectorWeights).length) {
           const c = _makeChartCard("Asset class");
           const el = document.createElement("div");
@@ -666,8 +662,7 @@ function renderInlineCharts(artifacts, parentEl, options = {}) {
     if (isRetirement && artifacts.retirement_yearly_table?.length && composition && Object.keys(composition).length) {
       const retirementAge = artifacts.retirement_age ?? 65;
       const chartsRow2 = document.createElement("div");
-      chartsRow2.className = "charts-row";
-      chartsRow2.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:16px;width:100%;";
+      chartsRow2.className = "charts-row charts-grid-2col";
 
       const portfolioCard = _makeChartCard("Portfolio projections vs age");
       const portfolioEl = document.createElement("div");

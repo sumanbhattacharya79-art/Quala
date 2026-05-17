@@ -29,13 +29,6 @@ function appendMoneyManagerUserId(payload, explicitUserId) {
 }
 
 const THEME_STORAGE_KEY = "portfolio-optimizer-theme";
-/** Breakpoint for mobile drawer, compact topbar, and chat layout (see mobile-view.md). */
-const MOBILE_MAX_WIDTH_PX = 768;
-
-function readIsMobileViewport() {
-  if (typeof window === "undefined") return false;
-  return window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH_PX}px)`).matches;
-}
 const COMPARE_SBS_KEY_PREFIX = "portfolio-optimizer:compare-sbs:";
 const COMPARE_CONNECT_KEY_PREFIX = "portfolio-optimizer:compare-connect:";
 function compareSbsStorageKey(uid) {
@@ -93,6 +86,7 @@ import { QUALA_TNC_VERSION } from "./legalConstants.js";
 import { AdvisorModelOutputDisclaimer } from "./advisorDisclaimer.jsx";
 import { LegalStickyFooter } from "./legalFooter.jsx";
 import { AboutUsModalBody } from "./AboutUsModalBody.jsx";
+import { MOBILE_MAX_WIDTH_PX, readIsMobileViewport } from "./useMobileViewport.js";
 
 function useSessionId() {
   // New session ID on every load: never read or write session to localStorage so it cannot persist
@@ -1406,6 +1400,29 @@ export default function App() {
     const t = setTimeout(() => refineChatTextareaRef.current?.focus(), 80);
     return () => clearTimeout(t);
   }, [refineChatOpen]);
+
+  useEffect(() => {
+    const ta = refineChatTextareaRef.current;
+    if (!refineChatOpen || !ta) return;
+    const scrollRefineIntoView = () => {
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }), 280);
+    };
+    ta.addEventListener("focus", scrollRefineIntoView);
+    if (typeof window !== "undefined" && window.visualViewport) {
+      window.visualViewport.addEventListener("resize", scrollRefineIntoView);
+    }
+    return () => {
+      ta.removeEventListener("focus", scrollRefineIntoView);
+      if (typeof window !== "undefined" && window.visualViewport) {
+        window.visualViewport.removeEventListener("resize", scrollRefineIntoView);
+      }
+    };
+  }, [refineChatOpen, refineChatInput]);
+
+  useEffect(() => {
+    const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 320);
+    return () => clearTimeout(t);
+  }, [sidebarOpen, isMobile]);
 
   useEffect(() => {
     setPortfolioWhatIfMode(false);
@@ -4577,6 +4594,43 @@ export default function App() {
             padding-right: max(14px, env(safe-area-inset-right));
             font-size: 8px;
           }
+          .form-panel,
+          .form-panel.below-messages {
+            padding: 16px;
+            max-width: 100%;
+          }
+          .form-panel .birth-dates-row {
+            flex-direction: column;
+            gap: 12px;
+          }
+          .form-panel .birth-date-group {
+            width: 100%;
+          }
+          .retirement-status-btn {
+            min-height: 44px;
+          }
+          .modal-overlay {
+            padding: 12px;
+            align-items: flex-end;
+          }
+          .login-modal {
+            min-width: 0;
+            width: 100%;
+            max-width: calc(100vw - 24px);
+            max-height: 90dvh;
+            overflow-y: auto;
+            box-sizing: border-box;
+          }
+          .refine-input-bar.refine-input-bar--inline {
+            padding-bottom: max(8px, env(safe-area-inset-bottom));
+          }
+        }
+        @media (max-width: 480px) {
+          .login-modal {
+            width: calc(100vw - 16px);
+            max-width: none;
+            padding: 18px 16px;
+          }
         }
       `}</style>
 
@@ -5248,7 +5302,7 @@ export default function App() {
                     {portfolioUpdateError ? (
                       <div className="portfolio-update-composition-error">{portfolioUpdateError}</div>
                     ) : null}
-                    <div style={{ overflowX: "auto" }}>
+                    <div className="portfolio-table-scroll">
                       <table className="portfolio-update-composition-table">
                         <thead>
                           <tr>
