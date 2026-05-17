@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { copyElementToClipboard } from "./copyChartImage.js";
+import { SHARE_COPY_ICON_HTML, SHARE_COPY_TOOLTIP } from "./shareCopyIcon.js";
 
 /**
  * Wraps content (gauges, etc.) with a one-click copy-to-clipboard control for social sharing.
@@ -42,10 +43,10 @@ export function ShareableSnapshot({
           className="share-copy-btn share-copy-btn--toolbar"
           onClick={onCopy}
           disabled={disabled}
+          title={SHARE_COPY_TOOLTIP}
           aria-label={title ? `Copy ${title} as image` : "Copy as image"}
-        >
-          Copy image
-        </button>
+          dangerouslySetInnerHTML={{ __html: SHARE_COPY_ICON_HTML }}
+        />
         {status ? (
           <span className="share-snapshot__status" role="status">
             {status}

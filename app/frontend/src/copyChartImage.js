@@ -2,6 +2,8 @@
  * Copy a DOM subtree as PNG to the clipboard (desktop + mobile) with download fallback.
  */
 
+import { applyShareCopyButtonChrome } from "./shareCopyIcon.js";
+
 function exportBackgroundColor() {
   const theme = document.documentElement.getAttribute("data-theme");
   return theme === "light" ? "#fffcf7" : "#0a0a0a";
@@ -99,26 +101,30 @@ export function decorateLifePlannerChartsForSharing(container, opts = {}) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "share-copy-btn";
-      btn.textContent = "Copy";
-      btn.setAttribute("aria-label", `Copy ${title} as image`);
+      applyShareCopyButtonChrome(btn, `Copy ${title} as image`);
 
       const onClick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (btn.disabled) return;
         btn.disabled = true;
-        const prev = btn.textContent;
         try {
           const result = await copyElementToClipboard(el, {
             filename: `quala-${slugifyFilename(title)}.png`,
           });
-          btn.textContent = result.method === "clipboard" ? "Copied!" : "Saved";
+          btn.classList.add("share-copy-btn--success");
+          btn.setAttribute(
+            "aria-label",
+            result.method === "clipboard" ? "Copied to clipboard" : "Image saved",
+          );
         } catch (err) {
           console.warn("Copy chart image failed:", err);
-          btn.textContent = "Failed";
+          btn.classList.add("share-copy-btn--failed");
+          btn.setAttribute("aria-label", "Copy failed");
         }
         window.setTimeout(() => {
-          btn.textContent = prev;
+          btn.classList.remove("share-copy-btn--success", "share-copy-btn--failed");
+          applyShareCopyButtonChrome(btn, `Copy ${title} as image`);
           btn.disabled = false;
         }, 2200);
       };

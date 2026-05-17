@@ -717,13 +717,13 @@ export function CompareView({
           {chartsReadyForSharing ? (
             <>
               {" "}
-              Tap <strong style={{ color: "var(--text)" }}>Copy</strong> on any chart or gauge to copy a PNG for Reddit and other social posts (paste from clipboard, or save on mobile).
+              Hover the <strong style={{ color: "var(--text)" }}>share</strong> icon on any chart or gauge to copy a PNG for Reddit and other social posts (paste from clipboard, or save on mobile).
             </>
           ) : null}
         </p>
       ) : chartsReadyForSharing ? (
         <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 16px", lineHeight: 1.55, maxWidth: 720 }}>
-          Tap <strong style={{ color: "var(--text)" }}>Copy</strong> on any chart to copy a PNG for social posts (paste from clipboard, or save on mobile).
+          Hover the <strong style={{ color: "var(--text)" }}>share</strong> icon on any chart to copy a PNG for social posts (paste from clipboard, or save on mobile).
         </p>
       ) : (
         <span className="compare-page-subhint" style={{ display: "block", marginBottom: 16 }}>

@@ -920,12 +920,12 @@
   top: 8px;
   right: 8px;
   z-index: 4;
-  min-height: 36px;
-  min-width: 56px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   color: var(--text, #fff);
   background: rgba(20, 20, 20, 0.88);
   border: 1px solid var(--border-soft, #333);
@@ -934,12 +934,26 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
+.share-copy-btn__icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+}
 .share-copy-btn:hover:not(:disabled) {
   background: rgba(40, 40, 40, 0.95);
 }
 .share-copy-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+.share-copy-btn--success {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.45);
+}
+.share-copy-btn--failed {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.45);
 }
 [data-theme="light"] .share-copy-btn {
   color: #1a1a1a;
@@ -948,7 +962,7 @@
 }
 .share-copy-btn--toolbar {
   position: static;
-  min-height: 40px;
+  margin-left: auto;
 }
 .share-snapshot {
   margin-bottom: 8px;
@@ -1000,19 +1014,19 @@
 }
 @media (max-width: 768px) {
   .share-copy-btn {
-    min-height: 44px;
-    min-width: 64px;
-    font-size: 13px;
+    width: 32px;
+    height: 32px;
     top: 6px;
     right: 6px;
   }
+  .share-copy-btn__icon {
+    width: 18px;
+    height: 18px;
+  }
   .backtest-result-header.share-copyable .share-copy-btn {
-    position: relative;
-    top: auto;
-    right: auto;
-    display: block;
-    width: 100%;
-    max-width: 140px;
-    margin: 8px 0 0 auto;
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    margin: 0;
   }
 }

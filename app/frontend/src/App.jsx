@@ -6306,7 +6306,7 @@ export default function App() {
                         maxWidth: 720,
                       }}
                     >
-                      Tap <strong style={{ color: "var(--text)" }}>Copy</strong> on any chart or table to copy a PNG
+                      Hover the <strong style={{ color: "var(--text)" }}>share</strong> icon on any chart or table to copy a PNG
                       for social posts (paste from clipboard, or save on mobile).
                     </p>
                   ) : null}
