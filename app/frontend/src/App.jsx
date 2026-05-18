@@ -95,6 +95,7 @@ import { isGoogleSignInConfigured, mountGoogleSignInButton } from "./googleSignI
 import { AdvisorModelOutputDisclaimer } from "./advisorDisclaimer.jsx";
 import { LegalStickyFooter } from "./legalFooter.jsx";
 import { AboutUsModalBody } from "./AboutUsModalBody.jsx";
+import { PricingPlansModalBody } from "./PricingPlansModal.jsx";
 import { MOBILE_MAX_WIDTH_PX, readIsMobileViewport } from "./useMobileViewport.js";
 
 function useSessionId() {
@@ -800,126 +801,6 @@ function formStateFromIntakeApi(intake) {
   };
 }
 
-function PricingPlansModalBody() {
-  const basicPlanCardRef = useRef(null);
-  const scrollToBasic = () => {
-    basicPlanCardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    basicPlanCardRef.current?.focus();
-  };
-
-  return (
-    <div className="pricing-plans-modal">
-      <div className="pricing-plans-grid">
-        <div className="pricing-plan-card">
-          <h4 className="pricing-plan-name">Free</h4>
-          <p className="pricing-plan-tag">Get started at no cost.</p>
-          <ul className="pricing-feature-list" aria-label="Free plan features">
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--ok" aria-hidden>
-                ✓
-              </span>
-              <span>Create and save portfolio (one)</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--ok" aria-hidden>
-                ✓
-              </span>
-              <span>Net worth monitoring</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--ok" aria-hidden>
-                ✓
-              </span>
-              <span>Limited AI assistance</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--no" aria-hidden>
-                ✗
-              </span>
-              <span>Multiple saved portfolios and scenarios (up to 5)</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--no" aria-hidden>
-                ✗
-              </span>
-              <span>Lifeplans</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--no" aria-hidden>
-                ✗
-              </span>
-              <span>Scenario planning</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--no" aria-hidden>
-                ✗
-              </span>
-              <span>Portfolio Rebalancing suggestions</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--no" aria-hidden>
-                ✗
-              </span>
-              <span>AI assistance</span>
-            </li>
-          </ul>
-          <button type="button" className="login-submit-btn pricing-upgrade-btn" onClick={scrollToBasic}>
-            Upgrade
-          </button>
-        </div>
-        <div
-          className="pricing-plan-card pricing-plan-card--basic"
-          ref={basicPlanCardRef}
-          tabIndex={-1}
-        >
-          <h4 className="pricing-plan-name">Basic</h4>
-          <p className="pricing-plan-price">$2/month or $20/year</p>
-          <ul className="pricing-feature-list" aria-label="Basic plan includes">
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--ok" aria-hidden>
-                ✓
-              </span>
-              <span>Create and save portfolios and scenarios (up to 5)</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--ok" aria-hidden>
-                ✓
-              </span>
-              <span>Net worth monitoring</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--ok" aria-hidden>
-                ✓
-              </span>
-              <span>Lifeplans</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--ok" aria-hidden>
-                ✓
-              </span>
-              <span>Scenario planning</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--ok" aria-hidden>
-                ✓
-              </span>
-              <span>Portfolio Rebalancing suggestions</span>
-            </li>
-            <li className="pricing-feature">
-              <span className="pricing-icon pricing-icon--ok" aria-hidden>
-                ✓
-              </span>
-              <span>AI assistance</span>
-            </li>
-          </ul>
-        </div>
-      </div>
-      <p className="pricing-plans-footnote">
-        Free and Basic do not connect to banks or brokerages—you add or upload holdings and keep them current.
-      </p>
-    </div>
-  );
-}
 
 /** Static marketing copy for top-bar links (replace or extend as needed). */
 const INFO_PAGES = {
@@ -1202,6 +1083,8 @@ export default function App() {
   /** After full-page auth login/register (not modal): `chat` e.g. resume save-portfolio flow; else `loggedInOptions`. */
   const [authPostLoginView, setAuthPostLoginView] = useState("loggedInOptions");
   const [infoModal, setInfoModal] = useState(null);
+  /** Plan tier from GET /api/billing/status (Stripe webhook is source of truth). */
+  const [billingStatus, setBillingStatus] = useState(null);
   const [pendingLoggedInAction, setPendingLoggedInAction] = useState(null); // "growth" | "retirement" | null when intake form is shown from logged-in flow
   /** After analyze CSV backtest succeeds, hide "Analyze current portfolio" on welcome until Start over in analyze panel. */
   const [hideAnalyzeWelcomeOption, setHideAnalyzeWelcomeOption] = useState(false);
@@ -1664,16 +1547,50 @@ export default function App() {
     }
   }, [userId]);
 
+  const fetchBillingStatus = useCallback(async (uidOverride) => {
+    const uid = (uidOverride ?? userId ?? "").trim();
+    if (!uid) {
+      setBillingStatus(null);
+      return;
+    }
+    try {
+      const res = await getJson(`/api/billing/status?user_id=${encodeURIComponent(uid)}`);
+      setBillingStatus(res);
+    } catch {
+      setBillingStatus({ plan_tier: "free", has_basic: false, billing_configured: false });
+    }
+  }, [userId]);
+
   useEffect(() => {
     if (userId) {
       fetchSavedPortfolios(undefined, true);
       fetchSavedScenarios();
       fetchSavedLifeScenarios();
       fetchNetWorthSidebar();
+      fetchBillingStatus(userId);
     } else {
       setNetWorthSidebarPayload(null);
+      setBillingStatus(null);
     }
-  }, [userId, fetchSavedPortfolios, fetchSavedScenarios, fetchSavedLifeScenarios, fetchNetWorthSidebar]);
+  }, [userId, fetchSavedPortfolios, fetchSavedScenarios, fetchSavedLifeScenarios, fetchNetWorthSidebar, fetchBillingStatus]);
+
+  useEffect(() => {
+    try {
+      const u = new URL(window.location.href);
+      const billingParam = u.searchParams.get("billing");
+      if (billingParam !== "success" && billingParam !== "cancel") return;
+      if (billingParam === "success") {
+        const uid = localStorage.getItem(USER_ID_KEY);
+        if (uid) fetchBillingStatus(uid);
+        setInfoModal("pricing");
+      }
+      u.searchParams.delete("billing");
+      const qs = u.searchParams.toString();
+      window.history.replaceState({}, "", u.pathname + (qs ? `?${qs}` : "") + u.hash);
+    } catch {
+      /* ignore */
+    }
+  }, [fetchBillingStatus]);
 
   useLayoutEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -3785,6 +3702,7 @@ export default function App() {
       setUserEmail(emailTrimmed);
       await fetchSavedPortfolios(uid);
       fetchNetWorthSidebar(uid);
+      fetchBillingStatus(uid);
       if (persistIntake) {
         try {
           const intake = getIntakeFromFormOrState();
@@ -3804,13 +3722,14 @@ export default function App() {
         setView(authPostLoginView);
       }
     },
-    [fetchSavedPortfolios, fetchNetWorthSidebar, getIntakeFromFormOrState, saveFormStateToStorage, authPostLoginView],
+    [fetchSavedPortfolios, fetchNetWorthSidebar, fetchBillingStatus, getIntakeFromFormOrState, saveFormStateToStorage, authPostLoginView],
   );
 
   const handleLogout = () => {
     localStorage.removeItem(USER_ID_KEY);
     localStorage.removeItem(USER_EMAIL_KEY);
     setUserId(null);
+    setBillingStatus(null);
     setUserEmail(null);
     setSavedPortfolios([]);
     setProfileSaved(false);
@@ -5321,7 +5240,15 @@ export default function App() {
                 <h3 className="login-modal-title">{INFO_PAGES[infoModal].title}</h3>
                 <div style={{ marginBottom: 8 }}>
                   {infoModal === "pricing" ? (
-                    <PricingPlansModalBody />
+                    <PricingPlansModalBody
+                      userId={userId}
+                      billing={billingStatus}
+                      onRequireLogin={() => {
+                        setInfoModal(null);
+                        setAccountModalOpen(true);
+                        setAccountModalTab("login");
+                      }}
+                    />
                   ) : infoModal === "about" ? (
                     <AboutUsModalBody />
                   ) : (

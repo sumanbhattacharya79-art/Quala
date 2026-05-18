@@ -969,6 +969,27 @@ body,
   margin-top: 14px;
   box-sizing: border-box;
 }
+.pricing-plan-active-banner {
+  font-size: 13px;
+  color: var(--accent, #c8a96e);
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.pricing-billing-error {
+  font-size: 13px;
+  color: #f87171;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.pricing-checkout-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.pricing-yearly-btn {
+  width: 100%;
+}
 .pricing-plans-footnote {
   margin: 14px 0 0;
   padding: 0 2px;

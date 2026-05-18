@@ -97,6 +97,19 @@ from backend.alphavantage_sector_bridge import (  # noqa: E402
 )
 from backend.unused_codes.agentic import LLMClient  # noqa: E402
 from backend.db_connection import close_db_pool  # noqa: E402
+from backend.entitlements import (  # noqa: E402
+    assert_can_save_life_plan,
+    assert_can_save_portfolio,
+    assert_can_save_scenario,
+    billing_status_payload,
+    require_basic,
+)
+from backend.billing import (  # noqa: E402
+    create_checkout_session,
+    create_portal_session,
+    handle_stripe_webhook,
+    stripe_configured,
+)
 from backend.db import (  # noqa: E402
     append_net_worth_value_history_snapshot,
     build_net_worth_chart_series,
@@ -649,6 +662,60 @@ def auth_google(payload: GoogleAuthRequest) -> Dict[str, object]:
     return {"status": "ok", "user_id": user_id, "email_id": email}
 
 
+class BillingCheckoutRequest(BaseModel):
+    user_id: str = Field(..., min_length=1)
+    billing_interval: Literal["monthly", "yearly"] = "monthly"
+
+
+class BillingPortalRequest(BaseModel):
+    user_id: str = Field(..., min_length=1)
+
+
+@app.get("/api/billing/status")
+def billing_status(user_id: str = Query(..., min_length=1)) -> Dict[str, object]:
+    """Current plan tier for the logged-in user (drives UI gating)."""
+    from backend.db import get_user_by_id
+
+    if not get_user_by_id(user_id.strip()):
+        raise HTTPException(status_code=404, detail="User not found")
+    out = billing_status_payload(user_id.strip())
+    out["billing_configured"] = stripe_configured()
+    return out
+
+
+@app.post("/api/billing/checkout-session")
+def billing_checkout_session(payload: BillingCheckoutRequest) -> Dict[str, object]:
+    from backend.db import get_user_by_id
+
+    uid = payload.user_id.strip()
+    if not get_user_by_id(uid):
+        raise HTTPException(status_code=404, detail="User not found")
+    url = create_checkout_session(user_id=uid, billing_interval=payload.billing_interval)
+    return {"url": url}
+
+
+@app.post("/api/billing/portal-session")
+def billing_portal_session(payload: BillingPortalRequest) -> Dict[str, object]:
+    from backend.db import get_user_by_id
+
+    uid = payload.user_id.strip()
+    if not get_user_by_id(uid):
+        raise HTTPException(status_code=404, detail="User not found")
+    url = create_portal_session(user_id=uid)
+    return {"url": url}
+
+
+@app.post("/api/billing/webhook")
+async def billing_webhook(
+    request: Request,
+    stripe_signature: Optional[str] = Header(None, alias="Stripe-Signature"),
+) -> Dict[str, str]:
+    """Stripe events (raw body; do not parse as JSON before verify)."""
+    payload = await request.body()
+    handle_stripe_webhook(payload, stripe_signature)
+    return {"received": "true"}
+
+
 def _save_intake_from_payload(user_id: str, intake: Dict[str, object]) -> None:
     """Convert intake payload to db format and save to user_intake."""
     from backend.intake_parser import coalesce_intake_spending_only
@@ -718,6 +785,7 @@ def _save_intake_from_payload(user_id: str, intake: Dict[str, object]) -> None:
 @app.post("/api/portfolio/save")
 def save_portfolio_to_db(payload: SavePortfolioRequest) -> Dict[str, object]:
     """Persist portfolio to saved_portfolios table (SQLite). Also saves user intake when provided."""
+    assert_can_save_portfolio(payload.user_id.strip())
     # Infer category from session: Panda (retirement) vs Quala (growth)
     category = payload.portfolio_category
     if not category or category not in ("growth", "retirement"):
@@ -933,6 +1001,7 @@ def mr_brown_chat_endpoint(payload: MrBrownChatRequest) -> Dict[str, object]:
     """Mr Brown: drift / drivers / rebalance chat for portfolio, net worth, or life planner pages."""
     from backend.mr_brown_service import run_mr_brown_chat
 
+    require_basic(payload.user_id.strip(), "Portfolio rebalancing suggestions (Mr Brown)")
     msg = (payload.message or "").strip()
     if not msg:
         raise HTTPException(status_code=400, detail="message is required")
@@ -1323,6 +1392,7 @@ def save_scenario_endpoint(payload: SaveScenarioRequest) -> Dict[str, object]:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     if row["user_id"] != payload.user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
+    assert_can_save_scenario(payload.user_id.strip())
     portfolio_name = (row.get("portfolio_name") or "My Portfolio").strip()
     base = (payload.scenario_name or "").strip() or "scenario"
     slug = re.sub(r"[^\w\-]", "-", portfolio_name.lower()).replace("--", "-").strip("-") or "portfolio"
@@ -1395,6 +1465,7 @@ def save_life_scenario_endpoint(
     payload: SaveLifeScenarioRequest,
     background_tasks: BackgroundTasks,
 ) -> Dict[str, object]:
+    assert_can_save_life_plan(payload.user_id.strip())
     try:
         out = save_life_scenario_bundle(
             user_id=payload.user_id,

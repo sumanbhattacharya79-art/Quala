@@ -177,6 +177,17 @@ def _ensure_columns(conn: Any) -> None:
         conn.execute("ALTER TABLE user ADD COLUMN auth_provider TEXT DEFAULT 'password'")
     except sqlite3.OperationalError:
         pass
+    for col, ddl in (
+        ("plan_tier", "TEXT NOT NULL DEFAULT 'free'"),
+        ("stripe_customer_id", "TEXT"),
+        ("stripe_subscription_id", "TEXT"),
+        ("subscription_status", "TEXT"),
+        ("plan_period_end", "TEXT"),
+    ):
+        try:
+            conn.execute(f'ALTER TABLE user ADD COLUMN {col} {ddl}')
+        except sqlite3.OperationalError:
+            pass
     try:
         conn.execute("""
             UPDATE net_worth_entries
@@ -561,6 +572,92 @@ def get_user_by_email(email_id: str) -> Optional[Dict[str, Any]]:
         "password_hash": row["password_hash"],
         "password_salt": row["password_salt"],
     }
+
+
+def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT user_id, email_id FROM user WHERE user_id = ?",
+            (user_id.strip(),),
+        ).fetchone()
+    if not row:
+        return None
+    return {"user_id": row["user_id"], "email_id": row["email_id"]}
+
+
+def _user_billing_row_to_dict(row: Any) -> Dict[str, Any]:
+    keys = row.keys() if hasattr(row, "keys") else ()
+    return {
+        "user_id": row["user_id"],
+        "email_id": row["email_id"] if "email_id" in keys else None,
+        "plan_tier": (row["plan_tier"] if "plan_tier" in keys else None) or "free",
+        "stripe_customer_id": row["stripe_customer_id"] if "stripe_customer_id" in keys else None,
+        "stripe_subscription_id": row["stripe_subscription_id"] if "stripe_subscription_id" in keys else None,
+        "subscription_status": row["subscription_status"] if "subscription_status" in keys else None,
+        "plan_period_end": row["plan_period_end"] if "plan_period_end" in keys else None,
+    }
+
+
+def get_user_billing(user_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT user_id, email_id, plan_tier, stripe_customer_id,
+                   stripe_subscription_id, subscription_status, plan_period_end
+            FROM user WHERE user_id = ?
+            """,
+            (user_id.strip(),),
+        ).fetchone()
+    if not row:
+        return None
+    return _user_billing_row_to_dict(row)
+
+
+def get_user_id_by_stripe_customer(stripe_customer_id: str) -> Optional[str]:
+    cid = (stripe_customer_id or "").strip()
+    if not cid:
+        return None
+    init_db()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM user WHERE stripe_customer_id = ?",
+            (cid,),
+        ).fetchone()
+    return str(row["user_id"]) if row else None
+
+
+def update_user_stripe_billing(
+    *,
+    user_id: str,
+    plan_tier: str,
+    stripe_customer_id: Optional[str] = None,
+    stripe_subscription_id: Optional[str] = None,
+    subscription_status: Optional[str] = None,
+    plan_period_end: Optional[str] = None,
+) -> None:
+    init_db()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE user SET
+                plan_tier = ?,
+                stripe_customer_id = COALESCE(?, stripe_customer_id),
+                stripe_subscription_id = ?,
+                subscription_status = ?,
+                plan_period_end = ?
+            WHERE user_id = ?
+            """,
+            (
+                (plan_tier or "free").strip().lower(),
+                stripe_customer_id,
+                stripe_subscription_id,
+                subscription_status,
+                plan_period_end,
+                user_id.strip(),
+            ),
+        )
 
 
 def verify_user(email_id: str, password: str) -> Optional[str]:
@@ -1340,6 +1437,16 @@ def count_portfolios_for_user(user_id: str) -> int:
     with get_db() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS c FROM saved_portfolios WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return int(row["c"]) if row else 0
+
+
+def count_scenarios_for_user(user_id: str) -> int:
+    init_db()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM saved_scenarios WHERE user_id = ?",
             (user_id,),
         ).fetchone()
         return int(row["c"]) if row else 0

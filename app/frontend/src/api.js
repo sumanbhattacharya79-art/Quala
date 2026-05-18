@@ -18,7 +18,9 @@ export async function getJson(url, options = {}) {
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
     const msg = typeof detail.detail === "string" ? detail.detail : "Request failed";
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
@@ -38,7 +40,9 @@ export async function postJson(url, payload, options = {}) {
         : Array.isArray(detail.detail)
           ? detail.detail.map((d) => d.msg || d).join("; ")
           : "Request failed";
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
