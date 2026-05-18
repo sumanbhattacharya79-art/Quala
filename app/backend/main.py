@@ -102,6 +102,7 @@ from backend.db import (  # noqa: E402
     build_net_worth_chart_series,
     count_portfolios_for_user,
     create_user,
+    create_user_from_google,
     delete_analyzed_portfolio,
     delete_life_scenario_for_user,
     delete_saved_portfolio,
@@ -114,6 +115,7 @@ from backend.db import (  # noqa: E402
     get_user_intake,
     get_user_net_worth,
     init_db,
+    resolve_google_auth_user,
     list_life_scenarios_by_user,
     list_portfolios,
     save_analyzed_portfolio,
@@ -213,6 +215,13 @@ class LoginRequest(BaseModel):
     """Login with email and password."""
     email_id: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
+
+
+class GoogleAuthRequest(BaseModel):
+    """Sign in with Google Identity Services id_token (JWT)."""
+    id_token: str = Field(..., min_length=10)
+    accept_terms: bool = False
+    terms_version: Optional[str] = None
 
 
 class BacktestRequest(BaseModel):
@@ -591,6 +600,53 @@ def login(payload: LoginRequest) -> Dict[str, object]:
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     return {"status": "ok", "user_id": user_id}
+
+
+@app.post("/api/auth/google")
+def auth_google(payload: GoogleAuthRequest) -> Dict[str, object]:
+    """Verify Google id_token and return user_id (create account on first sign-in)."""
+    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    if not client_id:
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
+
+    try:
+        from google.auth.transport import requests as google_requests
+        from google.oauth2 import id_token as google_id_token
+
+        idinfo = google_id_token.verify_oauth2_token(
+            payload.id_token,
+            google_requests.Request(),
+            client_id,
+        )
+    except Exception as exc:
+        _log.warning("Google token verification failed: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid Google sign-in") from exc
+
+    google_sub = str(idinfo.get("sub") or "")
+    email = (idinfo.get("email") or "").strip().lower()
+    email_verified = bool(idinfo.get("email_verified"))
+
+    try:
+        user_id, status = resolve_google_auth_user(
+            google_sub=google_sub,
+            email_id=email,
+            email_verified=email_verified,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if status == "new":
+        if not payload.accept_terms or (payload.terms_version or "") != QUALA_TNC_VERSION:
+            raise HTTPException(
+                status_code=400,
+                detail="You must scroll through and accept the Terms & Conditions before creating an account with Google.",
+            )
+        try:
+            user_id = create_user_from_google(google_sub=google_sub, email_id=email)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return {"status": "ok", "user_id": user_id, "email_id": email}
 
 
 def _save_intake_from_payload(user_id: str, intake: Dict[str, object]) -> None:

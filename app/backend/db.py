@@ -13,7 +13,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 try:
     import pysqlite3.dbapi2 as sqlite3  # type: ignore  # enables extension loading for sqlite-vec
@@ -167,6 +167,14 @@ def _ensure_columns(conn: Any) -> None:
         pass
     try:
         conn.execute("ALTER TABLE life_scenarios ADD COLUMN retirement_planner_intake_json TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute('ALTER TABLE user ADD COLUMN google_sub TEXT')
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE user ADD COLUMN auth_provider TEXT DEFAULT 'password'")
     except sqlite3.OperationalError:
         pass
     try:
@@ -529,8 +537,8 @@ def create_user(email_id: str, password: str) -> str:
         pwd_hash, pwd_salt = _hash_password(password)
         conn.execute(
             """
-            INSERT INTO user (user_id, email_id, password_hash, password_salt)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO user (user_id, email_id, password_hash, password_salt, auth_provider)
+            VALUES (?, ?, ?, ?, 'password')
             """,
             (user_id, email_id.strip().lower(), pwd_hash, pwd_salt),
         )
@@ -560,9 +568,106 @@ def verify_user(email_id: str, password: str) -> Optional[str]:
     user = get_user_by_email(email_id)
     if not user:
         return None
-    if not _verify_password(password, user["password_hash"], user["password_salt"]):
+    pwd_hash = user.get("password_hash")
+    pwd_salt = user.get("password_salt")
+    if not pwd_hash or not pwd_salt:
+        return None
+    if not _verify_password(password, pwd_hash, pwd_salt):
         return None
     return user["user_id"]
+
+
+def get_user_by_google_sub(google_sub: str) -> Optional[Dict[str, Any]]:
+    """Lookup user by Google subject id."""
+    if not google_sub:
+        return None
+    init_db()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT user_id, email_id, auth_provider FROM user WHERE google_sub = ?",
+            (google_sub,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "user_id": row["user_id"],
+        "email_id": row["email_id"],
+        "auth_provider": row["auth_provider"] if "auth_provider" in row.keys() else "google",
+    }
+
+
+def create_user_from_google(*, google_sub: str, email_id: str) -> str:
+    """Create a Google-only user (no password)."""
+    init_db()
+    email = email_id.strip().lower()
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT user_id FROM user WHERE email_id = ?",
+            (email,),
+        ).fetchone()
+        if existing:
+            raise ValueError(
+                "An account with this email already exists. Sign in with email and password."
+            )
+        user_id = str(uuid.uuid4())
+        if use_postgres():
+            conn.execute(
+                """
+                INSERT INTO user (user_id, email_id, password_hash, password_salt, google_sub, auth_provider)
+                VALUES (?, ?, NULL, NULL, ?, 'google')
+                """,
+                (user_id, email, google_sub),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO user (user_id, email_id, password_hash, password_salt, google_sub, auth_provider)
+                VALUES (?, ?, '', '', ?, 'google')
+                """,
+                (user_id, email, google_sub),
+            )
+    return user_id
+
+
+def resolve_google_auth_user(
+    *, google_sub: str, email_id: str, email_verified: bool
+) -> tuple[str, Literal["existing", "new"]]:
+    """
+    Returns (user_id, status). status is 'new' when the caller must create the user
+    (after terms acceptance). Raises ValueError on policy violations.
+    """
+    if not email_verified:
+        raise ValueError("Google email not verified")
+    if not google_sub:
+        raise ValueError("Invalid Google sign-in")
+    email = email_id.strip().lower()
+    if not email:
+        raise ValueError("Google account has no email")
+
+    hit = get_user_by_google_sub(google_sub)
+    if hit:
+        return hit["user_id"], "existing"
+
+    by_email = get_user_by_email(email)
+    if by_email:
+        raise ValueError(
+            "An account with this email already exists. Sign in with email and password."
+        )
+
+    return "", "new"
+
+
+def get_or_create_user_from_google(
+    *, google_sub: str, email_id: str, email_verified: bool
+) -> tuple[str, bool]:
+    """Returns (user_id, created_new_user)."""
+    user_id, status = resolve_google_auth_user(
+        google_sub=google_sub, email_id=email_id, email_verified=email_verified
+    )
+    if status == "existing":
+        return user_id, False
+    user_id = create_user_from_google(google_sub=google_sub, email_id=email_id)
+    return user_id, True
 
 
 def portfolio_name_exists_for_user(

@@ -23,11 +23,7 @@ export function ShareableSnapshot({
       const result = await copyElementToClipboard(rootRef.current, {
         filename: filename || "quala-life-planner.png",
       });
-      setStatus(
-        result.method === "clipboard"
-          ? "Copied — paste in Reddit or social"
-          : "Image saved — upload from downloads",
-      );
+      setStatus(result.method === "clipboard" ? "Copied" : "Image saved");
     } catch (err) {
       console.warn(err);
       setStatus("Copy failed — try again");

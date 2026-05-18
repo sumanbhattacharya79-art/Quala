@@ -91,6 +91,7 @@ import { NetWorthPanel } from "./NetWorthPanel.jsx";
 import { MrBrownChat } from "./MrBrownChat.jsx";
 import QUALA_TNC_FULL_TEXT from "./legal/terms-conditions.md?raw";
 import { QUALA_TNC_VERSION } from "./legalConstants.js";
+import { isGoogleSignInConfigured, mountGoogleSignInButton } from "./googleSignIn.js";
 import { AdvisorModelOutputDisclaimer } from "./advisorDisclaimer.jsx";
 import { LegalStickyFooter } from "./legalFooter.jsx";
 import { AboutUsModalBody } from "./AboutUsModalBody.jsx";
@@ -4023,6 +4024,8 @@ export default function App() {
           color: var(--text);
         }
         .auth-tab-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+        .auth-google-wrap { display: flex; justify-content: center; margin: 0 0 12px; min-height: 44px; }
+        .auth-or-divider { text-align: center; font-size: 11px; color: var(--text-muted); margin: 0 0 14px; letter-spacing: 0.04em; }
         .clickwrap-control {
           display: flex;
           align-items: flex-start;
@@ -7068,6 +7071,8 @@ function AuthForm({
   onCancel,
 }) {
   const termsScrollRef = useRef(null);
+  const googleBtnRef = useRef(null);
+  const googleMountCleanupRef = useRef(null);
   const [authTab, setAuthTab] = useState(defaultAuthTab === "login" ? "login" : "register");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -7094,6 +7099,68 @@ function AuthForm({
   }, [authTab]);
 
   const termsReady = termsScrolledToEnd && termsAccepted;
+  const googleEnabled = isGoogleSignInConfigured();
+
+  const handleGoogleCredential = useCallback(
+    async (response) => {
+      const token = response?.credential;
+      if (!token) return;
+      setFormError("");
+      const needsTerms = authTab === "register" && !termsReady;
+      if (needsTerms) {
+        setFormError('Scroll through the Terms and check "I understand" before continuing with Google.');
+        return;
+      }
+      setSaving(true);
+      try {
+        const res = await postJson("/api/auth/google", {
+          id_token: token,
+          accept_terms: authTab === "register" && termsReady,
+          terms_version: QUALA_TNC_VERSION,
+        });
+        const emailOut = (res.email_id || "").trim();
+        await onLoginSuccess(emailOut, res.user_id, {
+          fromAccountModal: accountGate,
+          persistIntake: authTab === "register" && !accountGate,
+        });
+      } catch (err) {
+        setFormError(err?.message || "Google sign-in failed.");
+      } finally {
+        setSaving(false);
+      }
+    },
+    [authTab, termsReady, accountGate, onLoginSuccess],
+  );
+
+  useEffect(() => {
+    if (!googleEnabled || !googleBtnRef.current) return undefined;
+    let cancelled = false;
+    const el = googleBtnRef.current;
+    el.innerHTML = "";
+    (async () => {
+      try {
+        const cleanup = await mountGoogleSignInButton(el, (resp) => {
+          if (!cancelled) handleGoogleCredential(resp);
+        });
+        if (cancelled) {
+          cleanup();
+          return;
+        }
+        googleMountCleanupRef.current = cleanup;
+      } catch (err) {
+        if (!cancelled) {
+          console.warn(err);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (googleMountCleanupRef.current) {
+        googleMountCleanupRef.current();
+        googleMountCleanupRef.current = null;
+      }
+    };
+  }, [googleEnabled, authTab, termsReady, handleGoogleCredential]);
 
   const handleLoginTabSubmit = async (e) => {
     e.preventDefault();
@@ -7237,6 +7304,13 @@ function AuthForm({
       ) : null}
 
       {authTab === "login" ? (
+        <>
+          {googleEnabled ? (
+            <>
+              <motion className="auth-google-wrap" ref={googleBtnRef} aria-hidden={saving} />
+              <p className="auth-or-divider">or continue with email</p>
+            </>
+          ) : null}
         <form onSubmit={handleLoginTabSubmit} className="login-form">
           <p style={{ marginBottom: 12, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
             Sign in with email and password. Terms are not required for returning users.
@@ -7276,9 +7350,16 @@ function AuthForm({
             </button>
           </div>
         </form>
+        </>
       ) : (
         <>
           {termsBlock}
+          {termsReady && googleEnabled ? (
+            <>
+              <div className="auth-google-wrap" ref={googleBtnRef} aria-hidden={saving} />
+              <p className="auth-or-divider">or continue with email</p>
+            </>
+          ) : null}
           {termsReady ? (
             <form onSubmit={handleRegisterGateSubmit} className="login-form">
               <p style={{ margin: "12px 0", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>

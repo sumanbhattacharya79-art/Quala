@@ -12,3 +12,4 @@ google-genai>=1.0.0
 crewai>=0.86.0
 litellm>=1.55.0
 google-cloud-storage>=2.14.0
+google-auth>=2.29.0
