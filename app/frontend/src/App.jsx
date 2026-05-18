@@ -245,7 +245,7 @@ const INITIAL_MESSAGES = [
   {
     id: 1,
     role: "assistant",
-    text: "Hi, I'm Quala — your AI assistant for researching and simulating portfolio strategies. I can help you explore growth allocations, stress-test ideas with backtests and Monte Carlo, and refine allocations step by step. Panda can help you build a retirement portfolio once you've saved a growth portfolio. First, I need a few details from you.",
+    text: "Hi, I'm Quala — your AI assistant for researching and simulating portfolio strategies. I can help you explore growth allocations, stress-test ideas with backtests and Monte Carlo, and refine allocations step by step. Panda, my fellow AI assistant, can help you build a retirement portfolio once you've saved a growth portfolio. First, I need a few details from you.",
     time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
   },
 ];
