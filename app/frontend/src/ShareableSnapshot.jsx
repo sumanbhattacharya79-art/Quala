@@ -56,9 +56,6 @@ export function ShareableSnapshot({
       <div ref={rootRef} className="share-snapshot__capture">
         {subtitle ? <div className="share-snapshot__subtitle">{subtitle}</div> : null}
         {children}
-        <div className="share-snapshot__brand" aria-hidden>
-          Quala.ai · hypothetical scenario, not financial advice
-        </div>
       </div>
     </div>
   );
