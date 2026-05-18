@@ -14,6 +14,19 @@ export function buildCompareDragPayload({ kind, source, portfolioId, scenarioId,
   };
 }
 
+/** Stable id for life-planner hydration (avoids re-fetch when selection object reference changes). */
+export function connectSelectionKey(left, right) {
+  if (!left?.portfolioId || !right?.portfolioId) return "";
+  return [
+    left.portfolioId,
+    left.scenarioId ?? "",
+    left.source ?? "",
+    right.portfolioId,
+    right.scenarioId ?? "",
+    right.source ?? "",
+  ].join("|");
+}
+
 export function compareSelFromDragPayload(payload) {
   if (!payload?.portfolioId || (payload.kind !== "growth" && payload.kind !== "retirement")) {
     return null;

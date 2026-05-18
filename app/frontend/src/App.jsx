@@ -72,6 +72,7 @@ import { PortfolioValueHistoryChart } from "./PortfolioValueHistoryChart.jsx";
 import { CompareView } from "./CompareView.jsx";
 import {
   compareSelFromDragPayload,
+  connectSelectionKey,
   validateLifePlannerPick,
   validateSameCategoryPick,
 } from "./comparePortfolioPick.js";
@@ -1289,6 +1290,12 @@ export default function App() {
   const openLifeScenarioRequestIdRef = useRef(0);
   /** When opening a saved life plan, planner-only intakes (API) override scenario rows for connect forms. */
   const connectPlannerIntakesRef = useRef({ g: null, r: null });
+  /** Last growth+retirement pair we finished hydrating (primitive key — stops duplicate intake GET loops). */
+  const lastConnectHydrateKeyRef = useRef("");
+  const compareLeftSelRef = useRef(compareLeftSel);
+  const compareRightSelRef = useRef(compareRightSel);
+  compareLeftSelRef.current = compareLeftSel;
+  compareRightSelRef.current = compareRightSel;
 
   /** Skip redundant restore when userId is unchanged (avoids resetting compare selections every render). */
   const prevCompareUserIdRef = useRef(undefined);
@@ -1501,6 +1508,8 @@ export default function App() {
       },
     ]);
   };
+  const addMessageRef = useRef(addMessage);
+  addMessageRef.current = addMessage;
 
   const isPortfolioChoiceMessage = (t) =>
     /^go with the (conservative|moderate|aggressive) portfolio$/i.test((t || "").trim());
@@ -2181,6 +2190,7 @@ export default function App() {
     setCompareNotice(null);
     setCompareRetireSyncMessage(null);
     connectPlannerIntakesRef.current = { g: null, r: null };
+    lastConnectHydrateKeyRef.current = "";
   }, []);
 
   const openConnectGrowthRetireView = useCallback(() => {
@@ -2242,6 +2252,7 @@ export default function App() {
           r: rp && typeof rp === "object" ? rp : null,
         };
         compareConnectBacktestTokenRef.current += 1;
+        lastConnectHydrateKeyRef.current = "";
         connectChartsHydrateInFlightRef.current = false;
         connectChartsHydrateAttemptsRef.current = { lifeId: null, count: 0 };
         const gArt = row.growth_backtest_artifacts;
@@ -2489,6 +2500,7 @@ export default function App() {
       setSelectedLifeScenarioId(null);
       connectPlannerIntakesRef.current = { g: null, r: null };
       compareConnectBacktestTokenRef.current += 1;
+      lastConnectHydrateKeyRef.current = "";
       if (side === "left") setCompareLeftSel(sel);
       else setCompareRightSel(sel);
     },
@@ -2566,14 +2578,29 @@ export default function App() {
 
   const compareGrowthArtifactsRef = useRef(compareGrowthArtifacts);
   const compareRetireArtifactsRef = useRef(compareRetireArtifacts);
+  const compareHydratingRef = useRef(compareHydrating);
   compareGrowthArtifactsRef.current = compareGrowthArtifacts;
   compareRetireArtifactsRef.current = compareRetireArtifacts;
+  compareHydratingRef.current = compareHydrating;
+
+  const compareConnectSelectionKey = useMemo(
+    () => connectSelectionKey(compareLeftSel, compareRightSel),
+    [
+      compareLeftSel?.portfolioId,
+      compareLeftSel?.scenarioId,
+      compareLeftSel?.source,
+      compareRightSel?.portfolioId,
+      compareRightSel?.scenarioId,
+      compareRightSel?.source,
+    ],
+  );
 
   /** Load saved intake into editable forms (no backtest) when both sides are set. */
   useEffect(() => {
     if (view !== "connectGrowthRetire") return;
-    if (!compareLeftSel || !compareRightSel) {
+    if (!compareConnectSelectionKey) {
       compareConnectBacktestTokenRef.current += 1;
+      lastConnectHydrateKeyRef.current = "";
       setCompareGrowthForm(null);
       setCompareRetireForm(null);
       setCompareGrowthArtifacts(null);
@@ -2581,7 +2608,15 @@ export default function App() {
       setCompareHydrating(false);
       return;
     }
+    if (compareConnectSelectionKey === lastConnectHydrateKeyRef.current) {
+      return;
+    }
+    const leftSel = compareLeftSelRef.current;
+    const rightSel = compareRightSelRef.current;
+    if (!leftSel || !rightSel) return;
+
     let cancelled = false;
+    const hydrateKey = compareConnectSelectionKey;
     (async () => {
       const uid = userId ?? localStorage.getItem(USER_ID_KEY);
       if (!uid) return;
@@ -2597,8 +2632,8 @@ export default function App() {
       setCompareRetireSyncMessage(null);
       try {
         const [gLoaded, rLoaded] = await Promise.all([
-          loadFormFromCompareSel(compareLeftSel),
-          loadFormFromCompareSel(compareRightSel),
+          loadFormFromCompareSel(leftSel),
+          loadFormFromCompareSel(rightSel),
         ]);
         let gForm = gLoaded;
         let rForm = rLoaded;
@@ -2617,21 +2652,25 @@ export default function App() {
           setCompareGrowthForm(gForm);
           setCompareRetireForm(rForm);
         }
-        if (!cancelled && !connectLifePlannerFrozen && compareLeftSel?.portfolioId && compareRightSel?.portfolioId) {
+        if (!cancelled && !connectLifePlannerFrozen && leftSel.portfolioId && rightSel.portfolioId) {
           const [gArt, rArt] = await Promise.all([
-            fetchPersistedBacktestArtifacts(compareLeftSel.portfolioId, uid),
-            fetchPersistedBacktestArtifacts(compareRightSel.portfolioId, uid),
+            fetchPersistedBacktestArtifacts(leftSel.portfolioId, uid),
+            fetchPersistedBacktestArtifacts(rightSel.portfolioId, uid),
           ]);
           if (!cancelled) {
             if (gArt && compareBacktestArtifactsReady(gArt)) setCompareGrowthArtifacts(gArt);
             if (rArt && compareBacktestArtifactsReady(rArt)) setCompareRetireArtifacts(rArt);
           }
         }
+        if (!cancelled && hydrateKey === connectSelectionKey(compareLeftSelRef.current, compareRightSelRef.current)) {
+          lastConnectHydrateKeyRef.current = hydrateKey;
+        }
       } catch (err) {
         if (!cancelled) {
-          addMessage("error", err.message || "Could not load compare items");
+          addMessageRef.current("error", err.message || "Could not load compare items");
           setCompareGrowthForm(null);
           setCompareRetireForm(null);
+          lastConnectHydrateKeyRef.current = "";
         }
       } finally {
         if (!cancelled) setCompareHydrating(false);
@@ -2640,15 +2679,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [
-    view,
-    compareLeftSel,
-    compareRightSel,
-    userId,
-    loadFormFromCompareSel,
-    connectLifePlannerFrozen,
-    selectedLifeScenarioId,
-  ]);
+  }, [view, compareConnectSelectionKey, userId, loadFormFromCompareSel, connectLifePlannerFrozen, selectedLifeScenarioId]);
 
   /** Saved life plan (frozen): column titles use portfolio/scenario name without "{life} — " prefix. */
   useEffect(() => {
@@ -2664,11 +2695,17 @@ export default function App() {
       if (!nextLabel || nextLabel === sel.label) return null;
       return { ...sel, label: nextLabel };
     };
-    const nextL = patchSel(compareLeftSel);
-    const nextR = patchSel(compareRightSel);
-    if (nextL) setCompareLeftSel(nextL);
-    if (nextR) setCompareRightSel(nextR);
-  }, [view, connectLifePlannerFrozen, savedScenarios, connectLifeScenarioNameInput, compareLeftSel, compareRightSel]);
+    const nextL = patchSel(compareLeftSelRef.current);
+    const nextR = patchSel(compareRightSelRef.current);
+    if (nextL) {
+      lastConnectHydrateKeyRef.current = "";
+      setCompareLeftSel(nextL);
+    }
+    if (nextR) {
+      lastConnectHydrateKeyRef.current = "";
+      setCompareRightSel(nextR);
+    }
+  }, [view, connectLifePlannerFrozen, savedScenarios, connectLifeScenarioNameInput]);
 
   useEffect(() => {
     if (view !== "compare") return;
@@ -2813,10 +2850,13 @@ export default function App() {
     if (view !== "connectGrowthRetire" || !selectedLifeScenarioId || !connectLifePlannerFrozen) {
       return;
     }
-    if (!compareLeftSel || !compareRightSel || !compareGrowthForm || !compareRetireForm || compareHydrating) {
+    if (!compareConnectSelectionKey || compareHydratingRef.current) {
       return;
     }
-    if (compareBacktestArtifactsReady(compareGrowthArtifacts) && compareBacktestArtifactsReady(compareRetireArtifacts)) {
+    if (
+      compareBacktestArtifactsReady(compareGrowthArtifactsRef.current) &&
+      compareBacktestArtifactsReady(compareRetireArtifactsRef.current)
+    ) {
       return;
     }
     if (compareGrowthRunLoading || compareRetireRunLoading) return;
@@ -2838,19 +2878,12 @@ export default function App() {
     })();
     return () => {
       cancelled = true;
-      connectChartsHydrateInFlightRef.current = false;
     };
   }, [
     view,
     selectedLifeScenarioId,
     connectLifePlannerFrozen,
-    compareLeftSel,
-    compareRightSel,
-    compareGrowthForm,
-    compareRetireForm,
-    compareHydrating,
-    compareGrowthArtifacts,
-    compareRetireArtifacts,
+    compareConnectSelectionKey,
     compareGrowthRunLoading,
     compareRetireRunLoading,
     runLifePlannerSequentialBacktests,
@@ -5369,6 +5402,7 @@ export default function App() {
                 }}
                 onClearSide={(side) => {
                   compareConnectBacktestTokenRef.current += 1;
+                  lastConnectHydrateKeyRef.current = "";
                   connectChartsHydrateInFlightRef.current = false;
                   setCompareNotice(null);
                   setCompareRetireSyncMessage(null);
