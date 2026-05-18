@@ -399,7 +399,7 @@ body,
   font-size: 14px;
   font-family: inherit;
   color: var(--text, #fff);
-  background: var(--bg-elevated, #111);
+  background: var(--surface-elevated, #111);
   border: 1px solid var(--border-soft, #333);
   border-radius: 8px;
   box-sizing: border-box;
@@ -1065,8 +1065,16 @@ body,
 .share-snapshot__capture {
   padding: 12px 12px 10px;
   border-radius: 8px;
-  background: var(--bg-elevated, #111);
+  background: var(--surface-elevated, #111);
   border: 1px solid var(--border-soft, #1e1e1e);
+}
+[data-theme="light"] .share-snapshot__capture {
+  background: var(--surface-elevated);
+  border-color: var(--border-soft);
+}
+[data-theme="light"] .share-snapshot__brand {
+  border-top-color: var(--border-soft);
+  color: var(--text-muted);
 }
 .share-snapshot__subtitle {
   font-size: 11px;

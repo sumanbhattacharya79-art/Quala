@@ -17,21 +17,31 @@ export function accentPairFromRetirementSuccess(retirementPct) {
   return { arc: "rgba(239, 68, 68, 0.95)", value: "rgb(248, 113, 113)" };
 }
 
-function SemiDial({ valuePct, label, accent, valueColor, emptyLabel, compact }) {
+/** @param {'default' | 'compact' | 'sidebar'} size */
+function dialLayout(size) {
+  if (size === "sidebar") {
+    return { R: 20, cx: 30, cy: 24, sw: 4, w: 60, h: 38, vbW: 60, vbH: 38, pctFont: 11, labelFont: 7, pctMarginTop: -4, labelMarginTop: 1 };
+  }
+  if (size === "compact") {
+    return { R: 30, cx: 45, cy: 36, sw: 6, w: 90, h: 58, vbW: 90, vbH: 58, pctFont: 15, labelFont: 8, pctMarginTop: -6, labelMarginTop: 2 };
+  }
+  return { R: 48, cx: 72, cy: 56, sw: 10, w: 144, h: 78, vbW: 144, vbH: 78, pctFont: 22, labelFont: 11, pctMarginTop: -10, labelMarginTop: 4 };
+}
+
+function resolveDialSize({ size, compact }) {
+  if (size) return size;
+  return compact ? "compact" : "default";
+}
+
+function SemiDial({ valuePct, label, accent, valueColor, emptyLabel, compact, size }) {
   const pct = valuePct == null || !Number.isFinite(valuePct) ? null : Math.max(0, Math.min(100, valuePct));
-  const R = compact ? 30 : 48;
-  const cx = compact ? 45 : 72;
-  const cy = compact ? 36 : 56;
-  const sw = compact ? 6 : 10;
-  const w = compact ? 90 : 144;
-  const h = compact ? 58 : 78;
-  const vbW = compact ? 90 : 144;
-  const vbH = compact ? 58 : 78;
+  const dialSize = resolveDialSize({ size, compact });
+  const { R, cx, cy, sw, w, h, vbW, vbH, pctFont, labelFont, pctMarginTop, labelMarginTop } = dialLayout(dialSize);
   const arcLen = Math.PI * R;
   const dash = pct == null ? 0 : (pct / 100) * arcLen;
 
   return (
-    <div style={{ width: w, textAlign: "center", flex: "0 0 auto" }}>
+    <div style={{ width: w, maxWidth: "100%", textAlign: "center", flex: dialSize === "sidebar" ? "1 1 0" : "0 0 auto", minWidth: 0 }}>
       <svg width={w} height={h} viewBox={`0 0 ${vbW} ${vbH}`} aria-hidden>
         <path
           d={`M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy}`}
@@ -53,25 +63,26 @@ function SemiDial({ valuePct, label, accent, valueColor, emptyLabel, compact }) 
       </svg>
       <div
         style={{
-          marginTop: compact ? -6 : -10,
-          fontSize: compact ? 15 : 22,
+          marginTop: pctMarginTop,
+          fontSize: pctFont,
           fontWeight: 700,
           color: pct == null ? "var(--text-muted)" : valueColor || "var(--text)",
           fontFamily: "'DM Mono', ui-monospace, monospace",
+          lineHeight: 1.1,
         }}
       >
         {pct == null ? emptyLabel || "—" : `${pct.toFixed(0)}%`}
       </div>
       <div
         style={{
-          fontSize: compact ? 8 : 11,
+          fontSize: labelFont,
           fontWeight: 600,
           color: "#c8a96e",
-          letterSpacing: compact ? "0.04em" : "0.06em",
+          letterSpacing: dialSize === "default" ? "0.06em" : "0.03em",
           textTransform: "uppercase",
-          marginTop: compact ? 2 : 4,
-          lineHeight: compact ? 1.2 : 1.35,
-          padding: compact ? "0 2px" : 0,
+          marginTop: labelMarginTop,
+          lineHeight: 1.2,
+          padding: dialSize === "default" ? 0 : "0 1px",
         }}
       >
         {label}
@@ -99,9 +110,11 @@ export function LifePlannerSingleDial({
   goalLabel = "Funded",
   retirementLabel = "Success",
   compact = false,
+  size,
   className,
 }) {
   const { arc, value } = accentPairFromRetirementSuccess(retirementSuccessPercent);
+  const dialSize = resolveDialSize({ size, compact });
   if (kind === "goal") {
     return (
       <div className={className}>
@@ -111,7 +124,7 @@ export function LifePlannerSingleDial({
         accent={arc}
         valueColor={value}
         emptyLabel="—"
-        compact={compact}
+        size={dialSize}
       />
       </div>
     );
@@ -124,7 +137,7 @@ export function LifePlannerSingleDial({
       accent={arc}
       valueColor={value}
       emptyLabel="—"
-      compact={compact}
+      size={dialSize}
     />
     </div>
   );
@@ -136,24 +149,28 @@ export function LifePlannerDials({
   goalLabel = "Funded",
   retirementLabel = "Success",
   compact = false,
+  size,
   showTopBorder = true,
   className,
 }) {
   const { arc, value } = accentPairFromRetirementSuccess(retirementSuccessPercent);
+  const dialSize = resolveDialSize({ size, compact });
+  const isSidebar = dialSize === "sidebar";
+  const rowClass = [className, isSidebar ? "life-planner-dials--sidebar" : null].filter(Boolean).join(" ");
   return (
     <div
-      className={className}
+      className={rowClass || undefined}
       style={{
         display: "flex",
-        flexWrap: "wrap",
-        gap: compact ? 6 : 28,
-        justifyContent: compact ? "center" : "center",
+        flexWrap: isSidebar ? "nowrap" : "wrap",
+        gap: isSidebar ? 4 : compact ? 6 : 28,
+        justifyContent: isSidebar ? "space-between" : "center",
         alignItems: "flex-start",
-        marginTop: compact ? 0 : 14,
-        paddingTop: compact ? 0 : 14,
+        marginTop: isSidebar || compact ? 0 : 14,
+        paddingTop: isSidebar || compact ? 0 : 14,
         borderTop: showTopBorder ? "1px solid var(--border-soft)" : "none",
-        maxWidth: compact ? "100%" : "none",
-        width: compact ? "100%" : undefined,
+        maxWidth: isSidebar || compact ? "100%" : "none",
+        width: isSidebar || compact ? "100%" : undefined,
         boxSizing: "border-box",
       }}
     >
@@ -163,7 +180,7 @@ export function LifePlannerDials({
         accent={arc}
         valueColor={value}
         emptyLabel="—"
-        compact={compact}
+        size={dialSize}
       />
       <SemiDial
         valuePct={retirementSuccessPercent}
@@ -171,7 +188,7 @@ export function LifePlannerDials({
         accent={arc}
         valueColor={value}
         emptyLabel="—"
-        compact={compact}
+        size={dialSize}
       />
     </div>
   );

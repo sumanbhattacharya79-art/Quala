@@ -3942,7 +3942,7 @@ export default function App() {
         .sidebar::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 3px; }
         .sidebar::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
         .sidebar.collapsed { width: 0; min-width: 0; padding: 0; overflow: hidden; }
-        .user-block { display: flex; flex-direction: column; gap: 10px; padding-bottom: 22px; border-bottom: 1px solid var(--user-block-border); }
+        .user-block { display: flex; flex-direction: column; gap: 8px; padding-bottom: 16px; border-bottom: 1px solid var(--user-block-border); }
         .user-block__top {
           display: flex;
           flex-direction: row;
@@ -4424,17 +4424,14 @@ export default function App() {
           overflow-x: clip;
         }
         .sidebar-life-planner-dials {
-          margin: 0 10px 14px;
-          padding: 8px 6px 10px;
-          border-radius: 8px;
-          border: 1px solid var(--border-soft);
-          background: var(--surface-elevated);
+          margin: 4px 0 0;
+          padding: 0;
           box-sizing: border-box;
           max-width: 100%;
+          width: 100%;
         }
-        .sidebar-life-planner-dials > div {
-          margin-left: auto;
-          margin-right: auto;
+        .sidebar-life-planner-dials .life-planner-dials--sidebar {
+          width: 100%;
         }
         .form-panel.form-panel--analyze-full { max-width: none; width: 100%; align-self: stretch; box-sizing: border-box; }
         .form-panel.form-panel--analyze-full .form-panel { max-width: none; }
@@ -4913,18 +4910,19 @@ export default function App() {
               </div>
               {userId ? <SidebarQuickScanDisclosure inline /> : null}
             </div>
+            {userId ? (
+              <div className="sidebar-life-planner-dials" role="region" aria-label="Life planner snapshot">
+                <LifePlannerDials
+                  size="sidebar"
+                  showTopBorder={false}
+                  goalLabel="Funded"
+                  retirementLabel="Success"
+                  goalFundedPercent={sidebarGoalFundedPercent}
+                  retirementSuccessPercent={sidebarRetirementSuccessPercent}
+                />
+              </div>
+            ) : null}
           </div>
-
-          {userId ? (
-            <div className="sidebar-life-planner-dials" role="region" aria-label="Life planner snapshot">
-              <LifePlannerDials
-                compact
-                showTopBorder={false}
-                goalFundedPercent={sidebarGoalFundedPercent}
-                retirementSuccessPercent={sidebarRetirementSuccessPercent}
-              />
-            </div>
-          ) : null}
 
           {userId && (
             <div className="sidebar-section">

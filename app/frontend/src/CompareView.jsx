@@ -794,8 +794,7 @@ export function CompareView({
                   }}
                 >
                   <ShareableSnapshot
-                    title="Goal saved"
-                    subtitle="Goal funded"
+                    title="Goal funded"
                     filename="quala-goal-funded.png"
                     className="life-planner-dial-share"
                   >
@@ -803,13 +802,12 @@ export function CompareView({
                       kind="goal"
                       goalFundedPercent={goalFundedPercent}
                       retirementSuccessPercent={retirementSuccessPercentDial}
-                      goalLabel="Goal saved"
+                      goalLabel="Goal funded"
                       retirementLabel="Retirement success"
                     />
                   </ShareableSnapshot>
                   <ShareableSnapshot
                     title="Retirement success"
-                    subtitle="Retirement Monte Carlo"
                     filename="quala-retirement-success.png"
                     className="life-planner-dial-share"
                   >
@@ -817,7 +815,7 @@ export function CompareView({
                       kind="retirement"
                       goalFundedPercent={goalFundedPercent}
                       retirementSuccessPercent={retirementSuccessPercentDial}
-                      goalLabel="Goal saved"
+                      goalLabel="Goal funded"
                       retirementLabel="Retirement success"
                     />
                   </ShareableSnapshot>
@@ -826,7 +824,7 @@ export function CompareView({
                 <LifePlannerDials
                   goalFundedPercent={goalFundedPercent}
                   retirementSuccessPercent={retirementSuccessPercentDial}
-                  goalLabel={intakeFrozen ? "Goal saved" : "Funded"}
+                  goalLabel={intakeFrozen ? "Goal funded" : "Funded"}
                   retirementLabel={intakeFrozen ? "Retirement success" : "Success"}
                   showTopBorder={false}
                 />
