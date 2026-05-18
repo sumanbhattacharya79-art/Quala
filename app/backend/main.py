@@ -85,6 +85,7 @@ from backend.analyze_portfolio_parser import (  # noqa: E402
     read_analyze_portfolio_csv,
 )
 from backend.saved_portfolio_backtest import (  # noqa: E402
+    enrich_artifacts_intake_timeline_markers,
     intake_context_from_user_intake_dict,
     run_backtest_for_saved_portfolio,
 )
@@ -956,6 +957,13 @@ def get_saved_portfolio(
         meta = get_backtest_snapshot_meta(portfolio_id, scenario_id=sid)
         art = get_backtest_snapshot(portfolio_id, scenario_id=sid)
         if art:
+            pi = row.get("intake")
+            if isinstance(pi, dict):
+                enrich_artifacts_intake_timeline_markers(
+                    art,
+                    pi,
+                    is_retirement=(row.get("portfolio_category") or "").strip() == "retirement",
+                )
             row["backtest_artifacts"] = art
             row["backtest_load_source"] = "portfolio_backtest_snapshots"
             row["backtest_scenario_id"] = sid or ""
@@ -1456,6 +1464,13 @@ def get_saved_scenario(
         pid = str(row.get("portfolio_id") or "")
         art = get_backtest_snapshot(pid, scenario_id=scenario_id) if pid else None
         if art:
+            pi = row.get("intake")
+            if isinstance(pi, dict):
+                enrich_artifacts_intake_timeline_markers(
+                    art,
+                    pi,
+                    is_retirement=(row.get("portfolio_category") or "").strip() == "retirement",
+                )
             row["backtest_artifacts"] = art
             row["backtest_load_source"] = "portfolio_backtest_snapshots"
             row["backtest_scenario_id"] = scenario_id

@@ -51,7 +51,11 @@ def set_intake_context(session_id: str, intake: "IntakeContext") -> None:
 
 
 def _upcoming_expenses_tuples_to_big_spending_rows(intake_context: Any) -> List[Dict[str, Any]]:
-    """Expose IntakeContext.upcoming_expenses (with optional labels) for growth chart markers."""
+    """Expose IntakeContext.upcoming_expenses (with optional labels) for timeline chart markers.
+
+    Positive amounts = one-time outflows; negative = one-time inflows (what-if windfall / growth inflow).
+    Chart uses positive ``amount`` plus optional ``kind``: ``inflow``.
+    """
     rows_out: List[Dict[str, Any]] = []
     for t in getattr(intake_context, "upcoming_expenses", None) or []:
         if not isinstance(t, tuple) or len(t) < 2:
@@ -61,9 +65,14 @@ def _upcoming_expenses_tuples_to_big_spending_rows(intake_context: Any) -> List[
             a = float(t[1])
         except (TypeError, ValueError):
             continue
-        if a <= 0:
+        if a == 0:
             continue
-        row: Dict[str, Any] = {"years": int(y) if y >= 1000 else int(y), "amount": a}
+        row: Dict[str, Any] = {
+            "years": int(y) if y >= 1000 else int(y),
+            "amount": abs(float(a)),
+        }
+        if a < 0:
+            row["kind"] = "inflow"
         if len(t) >= 3:
             lg = str(t[2]).strip()
             if lg:

@@ -2564,6 +2564,11 @@ export default function App() {
     [applySbsSelection],
   );
 
+  const compareGrowthArtifactsRef = useRef(compareGrowthArtifacts);
+  const compareRetireArtifactsRef = useRef(compareRetireArtifacts);
+  compareGrowthArtifactsRef.current = compareGrowthArtifacts;
+  compareRetireArtifactsRef.current = compareRetireArtifacts;
+
   /** Load saved intake into editable forms (no backtest) when both sides are set. */
   useEffect(() => {
     if (view !== "connectGrowthRetire") return;
@@ -2583,8 +2588,8 @@ export default function App() {
       setCompareHydrating(true);
       const keepFrozenArtifacts =
         connectLifePlannerFrozen &&
-        compareBacktestArtifactsReady(compareGrowthArtifacts) &&
-        compareBacktestArtifactsReady(compareRetireArtifacts);
+        compareBacktestArtifactsReady(compareGrowthArtifactsRef.current) &&
+        compareBacktestArtifactsReady(compareRetireArtifactsRef.current);
       if (!keepFrozenArtifacts) {
         setCompareGrowthArtifacts(null);
         setCompareRetireArtifacts(null);
@@ -2643,8 +2648,6 @@ export default function App() {
     loadFormFromCompareSel,
     connectLifePlannerFrozen,
     selectedLifeScenarioId,
-    compareGrowthArtifacts,
-    compareRetireArtifacts,
   ]);
 
   /** Saved life plan (frozen): column titles use portfolio/scenario name without "{life} — " prefix. */
@@ -6395,20 +6398,6 @@ export default function App() {
               )}
               {!portfolioViewLoading && portfolioViewData?.artifacts && (
                 <div style={{ marginTop: 16 }}>
-                  {compareBacktestArtifactsReady(portfolioViewData.artifacts) ? (
-                    <p
-                      style={{
-                        fontSize: 12,
-                        color: "var(--text-muted)",
-                        margin: "0 0 12px",
-                        lineHeight: 1.55,
-                        maxWidth: 720,
-                      }}
-                    >
-                      Hover the <strong style={{ color: "var(--text)" }}>share</strong> icon on any chart or table to copy a PNG
-                      for social posts (paste from clipboard, or save on mobile).
-                    </p>
-                  ) : null}
                   <ChartContainer artifacts={portfolioViewData.artifacts} theme={theme} />
                   {artifactsHaveInlineCharts(portfolioViewData.artifacts) ? (
                     <AdvisorModelOutputDisclaimer className="page-output-disclaimer" />

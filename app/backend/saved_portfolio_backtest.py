@@ -688,6 +688,29 @@ def _build_intake_context(i: dict) -> Optional[IntakeContext]:
     )
 
 
+def enrich_artifacts_intake_timeline_markers(
+    artifacts: Optional[Dict[str, Any]],
+    user_intake: Optional[Dict[str, Any]],
+    *,
+    is_retirement: bool,
+) -> None:
+    """Refresh ``intake.big_spending_rows`` on stored artifacts (outflows + one-time inflows with labels)."""
+    if not artifacts or not user_intake:
+        return
+    intake_ui = artifacts.get("intake")
+    if not isinstance(intake_ui, dict):
+        intake_ui = {}
+        artifacts["intake"] = intake_ui
+    ctx = intake_context_from_user_intake_dict(dict(user_intake), is_retirement)
+    if ctx is None:
+        return
+    from backend.crewai_app.crew_framework import _upcoming_expenses_tuples_to_big_spending_rows
+
+    rows = _upcoming_expenses_tuples_to_big_spending_rows(ctx)
+    if rows:
+        intake_ui["big_spending_rows"] = rows
+
+
 def intake_context_from_user_intake_dict(
     user_intake: Optional[Dict[str, Any]],
     is_retirement: bool,

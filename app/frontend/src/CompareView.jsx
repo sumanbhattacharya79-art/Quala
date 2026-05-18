@@ -719,22 +719,12 @@ export function CompareView({
       {intakeFrozen ? (
         <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 16px", lineHeight: 1.55, maxWidth: 720 }}>
           Saved life scenario — charts below reflect your last backtest. Use <strong style={{ color: "var(--text)" }}>Delete</strong> to remove this plan from Life planner.
-          {chartsReadyForSharing ? (
-            <>
-              {" "}
-              Hover the <strong style={{ color: "var(--text)" }}>share</strong> icon on any chart or gauge to copy a PNG for Reddit and other social posts (paste from clipboard, or save on mobile).
-            </>
-          ) : null}
         </p>
-      ) : chartsReadyForSharing ? (
-        <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 16px", lineHeight: 1.55, maxWidth: 720 }}>
-          Hover the <strong style={{ color: "var(--text)" }}>share</strong> icon on any chart to copy a PNG for social posts (paste from clipboard, or save on mobile).
-        </p>
-      ) : (
+      ) : !chartsReadyForSharing ? (
         <span className="compare-page-subhint" style={{ display: "block", marginBottom: 16 }}>
           Choose or drag one <strong style={{ color: "#c8a96e" }}>growth</strong> item on the left and one <strong style={{ color: "#c8a96e" }}>retirement</strong> item on the right (use the menus on phone). Intake is <strong style={{ color: "#c8a96e" }}>not editable</strong> here — change assumptions only by clearing or picking different items. Each <strong style={{ color: "#c8a96e" }}>Continue</strong> runs growth Monte Carlo, sets retirement <strong style={{ color: "#c8a96e" }}>initial portfolio at retirement</strong> from the growth median (P50) at the horizon, and runs the retirement backtest. Save once under <strong style={{ color: "#c8a96e" }}>Life scenario</strong> to store both sides under one name in the sidebar.
         </span>
-      )}
+      ) : null}
       {showGoalPanel ? (
         <div
           className="life-planner-goal-panel"

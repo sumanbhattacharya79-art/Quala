@@ -1,33 +1,88 @@
 import * as d3 from 'd3';
 import { parseExpenses, spendingFieldDeclaresOneTimeOutflows, expensesFromBigSpendingRows } from './api.js';
 
-function _timelineEventsFromSpending(intake) {
-  const raw = String(intake?.spending || '').trim();
-  const fromRows = expensesFromBigSpendingRows(intake?.big_spending_rows);
-  const key = (e) => `${Number(e.years)}|${Math.round(Number(e.amount))}`;
-  let items = [];
-  if (fromRows.length) {
-    items = [...fromRows];
-  }
-  if (raw && spendingFieldDeclaresOneTimeOutflows(raw)) {
-    const seen = new Set(items.map(key));
-    for (const p of parseExpenses(raw)) {
-      const k = key(p);
-      if (!seen.has(k)) {
-        items.push(p);
-        seen.add(k);
-      }
+function _timelineMarkerKind(e) {
+  if (e?.kind === "inflow") return "inflow";
+  const a = Number(e?.amount);
+  return a < 0 ? "inflow" : "outflow";
+}
+
+/** Collect one-time outflow/inflow rows for the future-projection timeline (deduped). */
+function _timelineMarkerRowsFromIntake(intake) {
+  const key = (e) =>
+    `${_timelineMarkerKind(e)}|${Number(e.years)}|${Math.round(Math.abs(Number(e.amount)))}`;
+  const seen = new Set();
+  const items = [];
+
+  const push = (row, kind) => {
+    if (!row || row.years == null || row.years === "") return;
+    const amt = Math.abs(Number(row.amount));
+    if (!Number.isFinite(amt) || amt < 1000) return;
+    const entry = {
+      years: row.years,
+      amount: amt,
+      label: row.label,
+      kind: kind || _timelineMarkerKind(row),
+    };
+    const k = key(entry);
+    if (seen.has(k)) return;
+    seen.add(k);
+    items.push(entry);
+  };
+
+  for (const raw of intake?.big_spending_rows || []) {
+    if (!raw || typeof raw !== "object") continue;
+    for (const r of expensesFromBigSpendingRows([raw])) {
+      push(
+        { ...r, label: raw.label ?? r.label },
+        raw.kind === "inflow" ? "inflow" : "outflow",
+      );
     }
   }
+  for (const r of expensesFromBigSpendingRows(intake?.growth_one_time_inflow_rows)) {
+    push(r, "inflow");
+  }
+  for (const r of expensesFromBigSpendingRows(intake?.windfall_inflow_rows)) {
+    push(r, "inflow");
+  }
+
+  const ue = intake?.upcoming_expenses;
+  if (Array.isArray(ue)) {
+    for (const e of ue) {
+      if (!e || typeof e !== "object") continue;
+      const a = Number(e.amount ?? e.value);
+      if (!Number.isFinite(a) || a === 0) continue;
+      const y = e.years ?? e.years_from_start;
+      push(
+        {
+          years: y,
+          amount: Math.abs(a),
+          label: e.label,
+          kind: a < 0 ? "inflow" : "outflow",
+        },
+        a < 0 ? "inflow" : "outflow",
+      );
+    }
+  }
+
+  const raw = String(intake?.spending || "").trim();
+  if (raw && spendingFieldDeclaresOneTimeOutflows(raw)) {
+    for (const p of parseExpenses(raw)) {
+      push(p, "outflow");
+    }
+  }
+
+  return items;
+}
+
+function _timelineEventsFromSpending(intake) {
+  const items = _timelineMarkerRowsFromIntake(intake);
   if (!items.length) return [];
   const sy = Number(intake?.start_year);
   const hasStartYear = Number.isFinite(sy) && sy >= 1990 && sy <= 2100;
   return items
-    // Guard against accidental matches from unrelated numbers in free-form text.
-    .filter((e) => Number(e?.amount) >= 1000)
     .map((e) => {
       let y = Number(e.years);
-      // parseExpenses uses calendar years (>=1000) for "100K in 2028" patterns; chart x-axis is horizon offset.
       if (hasStartYear && y >= 1000 && y <= 2100) {
         y = y - sy;
       }
@@ -36,10 +91,12 @@ function _timelineEventsFromSpending(intake) {
     .filter((e) => Number.isFinite(e.years) && e.years >= 0 && e.years <= 200)
     .map((e) => {
       const amt = Number(e.amount);
-      const amtStr = amt >= 1e6 ? (amt / 1e6).toFixed(1) + ' M' : (amt / 1e3).toFixed(1) + ' K';
-      const purpose = (e.label && String(e.label).trim()) || 'Spending';
+      const amtStr = amt >= 1e6 ? `${(amt / 1e6).toFixed(1)} M` : `${(amt / 1e3).toFixed(1)} K`;
+      const isInflow = _timelineMarkerKind(e) === "inflow";
+      const purpose =
+        (e.label && String(e.label).trim()) || (isInflow ? "Inflow" : "Spending");
       const label = `${purpose} ${amtStr}`;
-      return { year: e.years, label, amount: e.amount };
+      return { year: e.years, label, amount: e.amount, kind: isInflow ? "inflow" : "outflow" };
     });
 }
 
@@ -1923,7 +1980,12 @@ function _renderD3TimelineChart(el, scenarios, artifacts, growthComposition, ret
     const evX = xScale(startYear + ev.year) + xScale.bandwidth() / 2;
     if (evX >= 0 && evX <= innerWidth) {
       const lines = wrapLabel(ev.label, 18);
-      markers.push({ x: evX, lines, fontWeight: "normal" });
+      markers.push({
+        x: evX,
+        lines,
+        fontWeight: "normal",
+        kind: ev.kind === "inflow" ? "inflow" : "outflow",
+      });
     }
   });
 
@@ -1947,16 +2009,17 @@ function _renderD3TimelineChart(el, scenarios, artifacts, growthComposition, ret
     .attr("stroke-width", 2)
     .attr("stroke-dasharray", "4,4");
 
-  // Big expense lines
+  // One-time outflow / inflow lines
   events.forEach((ev) => {
     const evX = xScale(startYear + ev.year) + xScale.bandwidth() / 2;
     if (evX >= 0 && evX <= innerWidth) {
+      const stroke = ev.kind === "inflow" ? "#16a34a" : "#dc2626";
       g.append("line")
         .attr("x1", evX)
         .attr("x2", evX)
         .attr("y1", 0)
         .attr("y2", innerHeight)
-        .attr("stroke", "#dc2626")
+        .attr("stroke", stroke)
         .attr("stroke-width", 2)
         .attr("stroke-dasharray", "4,4");
     }
