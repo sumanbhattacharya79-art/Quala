@@ -4,7 +4,7 @@ FROM python:3.11-bookworm
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PYTHONPATH=/app/app
+    PYTHONPATH=/app/app:/app
 
 WORKDIR /app
 

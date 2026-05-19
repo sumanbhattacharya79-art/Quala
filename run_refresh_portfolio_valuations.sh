@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 if [[ "${1:-}" == "" ]]; then
   if [[ -n "${GCS_BUCKET:-}" ]]; then
-    PYTHONPATH=app python3 -c "from backend.data_output_gcs import sync_data_output_from_gcs; sync_data_output_from_gcs()"
+    PYTHONPATH=.:app python3 -c "from backend.data_output_gcs import sync_data_output_from_gcs; sync_data_output_from_gcs()"
   fi
   PYTHONPATH=app python3 scripts/jobs/daily_refresh_saved_portfolio_values.py
   exit $?
