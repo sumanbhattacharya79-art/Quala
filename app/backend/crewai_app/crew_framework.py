@@ -233,6 +233,105 @@ def _fmt_val(val: float) -> str:
     return f"${v:.2f}"
 
 
+def _growth_no_rebalance_scenario(scenarios: Optional[list]) -> dict:
+    """UI / driver row for the no-rebalancing growth backtest (internal key ``none``)."""
+    for s in scenarios or []:
+        if not isinstance(s, dict):
+            continue
+        name = str(s.get("scenario") or "").strip().lower()
+        if name == "none" or "no rebalancing" in name:
+            return s
+    if scenarios and isinstance(scenarios[0], dict):
+        return scenarios[0]
+    return {}
+
+
+def _format_growth_mc_facts_for_ana(artifacts: Optional[dict]) -> str:
+    """Authoritative growth MC + backtest figures for Ana (matches UI tables/charts)."""
+    if not artifacts or artifacts.get("is_retirement"):
+        return (
+            "FACTS (authoritative): Growth backtest output is not in this prompt yet. "
+            "Call run_backtest first. Until the tool returns MEDIAN AT HORIZON and Monte Carlo lines, "
+            "do not state portfolio $ at horizon or TWR percentages."
+        )
+    scenarios = artifacts.get("scenarios") or []
+    row = _growth_no_rebalance_scenario(scenarios)
+    m = row.get("metrics") or {}
+    mc = row.get("monte_carlo") or {}
+    if not mc and not m:
+        return (
+            "FACTS (authoritative): No scenario metrics stored. Run run_backtest; "
+            "then cite only fields from that tool output."
+        )
+
+    lines = [
+        "FACTS (authoritative — your Final Answer MUST use these numbers for the user-facing summary; "
+        "they match the tables and charts in the UI):"
+    ]
+    tv50 = mc.get("terminal_value_p50")
+    if tv50 is not None:
+        try:
+            v = float(tv50)
+            lines.append(
+                f"- Median (P50) portfolio value at planning horizon: {_fmt_val(v)} "
+                f"(raw terminal_value_p50 = {v:,.2f} USD). Cite this dollar amount only."
+            )
+        except (TypeError, ValueError):
+            pass
+    cagr_mc = mc.get("cagr_p50")
+    if cagr_mc is not None:
+        try:
+            lines.append(
+                f"- Median (P50) Monte Carlo time-weighted return (TWR): {float(cagr_mc) * 100:.2f}% "
+                f"(raw cagr_p50 = {float(cagr_mc):.6f}). When you say \"median TWR\", use THIS line only."
+            )
+        except (TypeError, ValueError):
+            pass
+    cagr_hist = m.get("cagr")
+    if cagr_hist is not None:
+        try:
+            lines.append(
+                f"- Historical single-path backtest TWR (metrics.cagr): {float(cagr_hist) * 100:.2f}% "
+                f"(raw {float(cagr_hist):.6f}). Do NOT call this \"median\" TWR — it differs from cagr_p50."
+            )
+        except (TypeError, ValueError):
+            pass
+    max_dd = m.get("max_drawdown")
+    if max_dd is not None:
+        try:
+            lines.append(
+                f"- Historical max drawdown (metrics.max_drawdown): {float(max_dd) * 100:.2f}% "
+                f"(raw {float(max_dd):.6f})."
+            )
+        except (TypeError, ValueError):
+            pass
+    sharpe = m.get("sharpe_ratio")
+    if sharpe is not None:
+        try:
+            lines.append(f"- Sharpe ratio (metrics.sharpe_ratio): {float(sharpe):.2f}.")
+        except (TypeError, ValueError):
+            pass
+    prob_loss = mc.get("prob_loss")
+    if prob_loss is not None:
+        try:
+            lines.append(f"- Monte Carlo probability of loss (prob_loss): {float(prob_loss) * 100:.1f}%.")
+        except (TypeError, ValueError):
+            pass
+    pvar = mc.get("portfolio_value_at_retirement")
+    if pvar is not None and tv50 is not None:
+        try:
+            lines.append(
+                f"- portfolio_value_at_retirement ({_fmt_val(float(pvar))}) is the historical path at horizon — "
+                "do NOT substitute for terminal_value_p50."
+            )
+        except (TypeError, ValueError):
+            pass
+    lines.append(
+        "- If any number in conversation history or Quala's estimates disagrees with FACTS, ignore them and use FACTS."
+    )
+    return "\n".join(lines)
+
+
 def _format_retirement_mc_facts_for_emu(artifacts: Optional[dict]) -> str:
     """Authoritative Monte Carlo bullet list for Emu (prevents upbeat text when depletion is severe)."""
     if not artifacts or not artifacts.get("is_retirement"):
@@ -1275,18 +1374,41 @@ class RunBacktestTool(BaseTool):
                         v = mc.get(key)
                         all_results_text.append(f"  {key}: {v:.4f}" if v is not None else f"  {key}: N/A")
 
+            none_row = None
+            for _sc_row in results.get("scenarios") or []:
+                if _sc_row.get("scenario") == "none":
+                    none_row = _sc_row
+                    break
+            if none_row is None and results.get("scenarios"):
+                none_row = results["scenarios"][0]
+
             # Build a SHORT observation for the LLM so Ana can produce a brief Final Answer (not a wall of text)
-            if results.get("scenarios"):
-                s0 = results["scenarios"][0]
-                m0, mc0 = s0.get("metrics", {}), s0.get("monte_carlo", {})
-                cagr = m0.get("cagr")
+            if none_row:
+                m0, mc0 = none_row.get("metrics", {}), none_row.get("monte_carlo", {})
+                cagr_mc = mc0.get("cagr_p50")
+                cagr_hist = m0.get("cagr")
                 sharpe = m0.get("sharpe_ratio")
                 max_dd = m0.get("max_drawdown")
                 prob_loss = mc0.get("prob_loss")
+                tv50_short = mc0.get("terminal_value_p50")
                 observation_parts.append(
                     "Backtest complete. Key results: "
-                    + (f"TWR {cagr:.2%}, " if cagr is not None else "")
-                    + (f"Sharpe {sharpe:.2}, " if sharpe is not None else "")
+                    + (
+                        f"Median horizon value (terminal_value_p50) {_fmt_val(float(tv50_short))}, "
+                        if tv50_short is not None
+                        else ""
+                    )
+                    + (
+                        f"median MC TWR (cagr_p50) {float(cagr_mc):.2%}, "
+                        if cagr_mc is not None
+                        else ""
+                    )
+                    + (
+                        f"historical path TWR (metrics.cagr) {float(cagr_hist):.2%} — not median TWR, "
+                        if cagr_hist is not None
+                        else ""
+                    )
+                    + (f"Sharpe {sharpe:.2f}, " if sharpe is not None else "")
                     + (f"Max drawdown {max_dd:.2%}. " if max_dd is not None else "")
                     + (f"Probability of loss: {prob_loss:.1%}." if prob_loss is not None else "")
                 )
@@ -1387,10 +1509,36 @@ class RunBacktestTool(BaseTool):
 
             # ---- Median P50 at horizon for Ana (authoritative dollar; no withdrawal-rule math) ----
             p50_at_retirement = None
-            if results.get("scenarios"):
-                s_first = results["scenarios"][0]
-                mc_first = s_first.get("monte_carlo", {})
+            cagr_p50_mc = None
+            if none_row:
+                mc_first = none_row.get("monte_carlo", {})
+                m_first = none_row.get("metrics", {})
                 p50_at_retirement = mc_first.get("terminal_value_p50")
+                cagr_p50_mc = mc_first.get("cagr_p50")
+                max_dd_mc = m_first.get("max_drawdown")
+                if p50_at_retirement is not None or cagr_p50_mc is not None:
+                    all_results_text.append("")
+                    all_results_text.append("=== ANA: CITE IN FINAL ANSWER (no-rebalancing) ===")
+                    if p50_at_retirement is not None:
+                        all_results_text.append(
+                            f"  terminal_value_p50 (median $ at horizon): {_fmt_val(float(p50_at_retirement))} "
+                            f"(raw {float(p50_at_retirement):,.2f})"
+                        )
+                    if cagr_p50_mc is not None:
+                        all_results_text.append(
+                            f"  cagr_p50 (median MC TWR): {float(cagr_p50_mc) * 100:.2f}% (raw {float(cagr_p50_mc):.6f})"
+                        )
+                    cagr_hist = m_first.get("cagr")
+                    if cagr_hist is not None:
+                        all_results_text.append(
+                            f"  metrics.cagr (historical path TWR only, NOT median): "
+                            f"{float(cagr_hist) * 100:.2f}% (raw {float(cagr_hist):.6f})"
+                        )
+                    if max_dd_mc is not None:
+                        all_results_text.append(
+                            f"  metrics.max_drawdown: {float(max_dd_mc) * 100:.2f}% (raw {float(max_dd_mc):.6f})"
+                        )
+                    all_results_text.append("=== END ANA CITE ===")
             if p50_at_retirement is not None and p50_at_retirement > 0:
                 all_results_text.append("")
                 all_results_text.append("=== MEDIAN AT HORIZON (include in your chat reply) ===")
@@ -1409,15 +1557,24 @@ class RunBacktestTool(BaseTool):
                 observation_parts.append(
                     "REQUIRED order for Final Answer: (1) State the median (P50) portfolio value at the planning "
                     f"horizon using this EXACT figure from the tool (terminal_value_p50): {_fmt_val(p50_at_retirement)} "
-                    "— do not round or replace with a different dollar amount. (2) Brief risk/growth comment. "
-                    "(3) Tell the user to save this growth portfolio, try scenarios, and/or build a retirement "
-                    "portfolio for an end-to-end life plan."
+                    "— do not round or replace with a different dollar amount. "
                 )
+                if cagr_p50_mc is not None:
+                    observation_parts.append(
+                        f"(2) State median MC TWR using cagr_p50: {float(cagr_p50_mc) * 100:.2f}%. "
+                        "(3) Brief risk/growth comment. (4) Tell the user to save, try scenarios, and/or build retirement."
+                    )
+                else:
+                    observation_parts.append(
+                        "(2) Brief risk/growth comment. (3) Tell the user to save, try scenarios, and/or build retirement."
+                    )
 
-            # Return a SHORT observation so Ana can reply with a brief Final Answer (tables/charts are in the UI)
+            # Return tool metrics + short instructions (tables/charts are in the UI)
             observation_parts.append(
-                "Now output ONLY: Thought: <1 line> then Final Answer: <2-4 sentence summary for the user>."
+                "Now output ONLY: Thought: <1 line> then Final Answer: <2-5 sentence summary for the user>."
             )
+            if all_results_text:
+                observation_parts.append("\n".join(all_results_text))
             return "\n".join(observation_parts)
         except FileNotFoundError as exc:
             logger.warning("RunBacktestTool missing data: %s", exc)
@@ -2122,13 +2279,15 @@ _OUTPUT_FORMAT_ANALYST = (
 
 # Ana / Emu must not paraphrase or "clean" backtest/MC figures (prevents $1.15M vs $1.2M drift).
 _ANALYST_GROWTH_NUMERIC_FIDELITY = (
-    "NUMERIC FIDELITY (mandatory): In your Final Answer, every figure you cite from the backtest run must "
-    "match the run_backtest tool output exactly. For the **median (P50) portfolio value at the planning horizon**, "
-    "use ONLY `terminal_value_p50` from the Monte Carlo section (and the MEDIAN AT HORIZON block, which repeats it). "
-    "Do **not** substitute `portfolio_value_at_retirement` (single historical path) "
-    "or any other field for that P50 dollar amount. Do not round or change digits (no approximations like "
-    "\"about $1.2M\" unless the tool printed that exact rounding). Prefer quoting the tool line verbatim for "
-    "dollar amounts.\n\n"
+    "NUMERIC FIDELITY (mandatory): Read the FACTS block and run_backtest tool output before writing Final Answer.\n"
+    "Field map (no-rebalancing growth scenario):\n"
+    "  • Median portfolio $ at planning horizon → Monte Carlo `terminal_value_p50` ONLY "
+    "(also in === MEDIAN AT HORIZON ===). Never use portfolio_value_at_retirement, chart ticks, or Quala estimates.\n"
+    "  • \"Median TWR\" in your summary → Monte Carlo `cagr_p50` ONLY (median across simulated paths).\n"
+    "  • `metrics.cagr` → historical single-path backtest TWR; you may mention it only if labeled "
+    "\"historical backtest TWR\", never as the median MC TWR.\n"
+    "  • Max drawdown → `metrics.max_drawdown` (decimal, e.g. -0.3956 = -39.56%).\n"
+    "Copy FACTS / tool lines exactly—no recomputing, no swapping fields, no digits from conversation history.\n\n"
 )
 
 _EMU_RETIREMENT_NUMERIC_FIDELITY = (
@@ -2170,6 +2329,7 @@ def _build_analyst_task(agent: Agent) -> Task:
     return Task(
         description=(
             "Session ID: {session_id}\n"
+            "{growth_mc_facts}\n\n"
             "You are Ana. The user has chosen a portfolio. Your job: validate it with real data, "
             "then output a summary so the user can save it.\n\n"
             "Chosen portfolio (backtest THIS):\n{chosen_portfolio}\n\n"
@@ -2193,10 +2353,11 @@ def _build_analyst_task(agent: Agent) -> Task:
             + "Step 4 — Final Answer: After run_backtest succeeds, output:\n"
             "  Thought: <one line>\n"
             "  Final Answer: <2–5 sentences>\n"
-            "Include in this order: (a) the median (P50) portfolio value at the planning horizon **exactly as "
-            "`terminal_value_p50` in the tool output / MEDIAN AT HORIZON block** (same value, verbatim or "
-            "equivalent formatting only), (b) a brief interpretation of risk and growth, "
-            "(c) tell the user: please SAVE this growth portfolio, try different scenario planning to explore alternatives, "
+            "Include in this order: (a) median (P50) portfolio value at horizon from FACTS / "
+            "`terminal_value_p50` / MEDIAN AT HORIZON (e.g. $9.73M), (b) median MC TWR from FACTS / `cagr_p50` "
+            "(e.g. 7.44%) — not metrics.cagr, (c) optional one line on max drawdown from `metrics.max_drawdown`, "
+            "(d) brief interpretation, "
+            "(e) tell the user: please SAVE this growth portfolio, try different scenario planning to explore alternatives, "
             "and/or build a retirement portfolio (with Panda) so they can assemble an end-to-end life plan "
             "(accumulation plus decumulation).\n\n"
             "Charts and tables are shown automatically — do NOT recite long metric tables.\n\n"
@@ -2240,6 +2401,7 @@ def _build_post_analysis_task(agent: Agent) -> Task:
     return Task(
         description=(
             "Session ID (same as Quala; same session): {session_id}\n"
+            "{growth_mc_facts}\n\n"
             "You are Ana. Answer about the GROWTH portfolio that was backtested in this session.\n\n"
             "You handle ONLY growth portfolios. Retirement portfolios are handled by Emu.\n\n"
             "You are answering a follow-up question from the user about "
@@ -2785,31 +2947,29 @@ def _summary_from_artifacts(artifacts: dict) -> str:
             "Review the detailed metrics and asset breakdown charts below. You can save this portfolio with the Save button."
         )
         return " ".join(parts).strip()
-    m = s0.get("metrics") or {}
-    mc = s0.get("monte_carlo") or {}
-    cagr = m.get("cagr")
+    row = _growth_no_rebalance_scenario(scenarios)
+    m = row.get("metrics") or {}
+    mc = row.get("monte_carlo") or {}
+    cagr_mc = mc.get("cagr_p50")
     sharpe = m.get("sharpe_ratio")
     max_dd = m.get("max_drawdown")
     prob_loss = mc.get("prob_loss")
     p50 = mc.get("terminal_value_p50")
     parts = []
-    if cagr is not None or sharpe is not None:
-        line = "Based on the backtest, this portfolio delivered "
-        if cagr is not None:
-            line += f"a time-weighted return around {cagr:.2%}"
-        if cagr is not None and sharpe is not None:
-            line += " with "
-        if sharpe is not None:
-            line += f"a Sharpe ratio of about {sharpe:.2}"
-        line += ", balancing growth and risk with meaningful ups and downs along the way."
-        parts.append(line)
+    if cagr_mc is not None:
+        parts.append(
+            f"The median (P50) Monte Carlo time-weighted return is about {float(cagr_mc):.2%} annualized."
+        )
     if max_dd is not None:
-        parts.append(f"In the worst historical stretch, the portfolio fell about {max_dd:.2%} from peak to trough.")
+        parts.append(f"In the worst historical stretch, the portfolio fell about {float(max_dd):.2%} from peak to trough.")
     if prob_loss is not None:
-        parts.append(f"In Monte Carlo simulations, the chance of finishing with less than you started is about {prob_loss:.1%}.")
+        parts.append(
+            f"In Monte Carlo simulations, the chance of finishing with less than you started is about {float(prob_loss):.1%}."
+        )
     if p50 is not None:
         parts.append(
-            f"The median (P50) portfolio value at retirement (end of the planning horizon) is roughly {_fmt_val(p50)}."
+            f"The median (P50) portfolio value at the planning horizon is roughly {_fmt_val(float(p50))} "
+            f"(terminal_value_p50)."
         )
     parts.append(
         "The detailed numbers are in the tables and charts below. "
@@ -3366,6 +3526,9 @@ def run_message(
         "chosen_composition_json": chosen_composition_json,
         "intake_summary": intake_summary,
         "retirement_mc_facts": "FACTS: Not applicable (this task is not Emu retirement analysis).",
+        "growth_mc_facts": (
+            "FACTS: Not applicable (this task is not Ana growth backtest analysis)."
+        ),
     }
     if inputs:
         runtime_inputs.update(inputs)
@@ -3505,12 +3668,14 @@ def run_message(
         finally:
             _BACKTEST_SESSION_ID.session_id = None
 
-    if (
-        session.phase == "analyst_running"
-        and session.chosen_retirement_composition
-    ):
+    if session.phase in ("analyst_running", "post_analysis"):
         art = _peek_stored_backtest_artifacts(session_id)
-        runtime_inputs["retirement_mc_facts"] = _format_retirement_mc_facts_for_emu(art)
+        if session.chosen_retirement_composition or (
+            _is_retirement_portfolio_session(session) and session.chosen_composition
+        ):
+            runtime_inputs["retirement_mc_facts"] = _format_retirement_mc_facts_for_emu(art)
+        else:
+            runtime_inputs["growth_mc_facts"] = _format_growth_mc_facts_for_ana(art)
 
     def _run_crew():
         worker_tid.append(str(threading.get_ident()))
